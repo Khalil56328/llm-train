@@ -93,7 +93,7 @@
             <el-row :gutter="20">
               <el-col :span="8">
                 <el-form-item label="学习率">
-                  <el-input v-model="form.learningRate" placeholder="5e-5" />
+                  <el-input v-model="form.learningRate" placeholder="1e-5" />
                 </el-form-item>
               </el-col>
               <el-col :span="8">
@@ -204,13 +204,13 @@ const form = reactive({
   method: 'lora',
   baseModel: '',
   operator: '',
-  learningRate: '5e-5',
-  epochs: 3,
-  batchSize: 16,
-  kvParams: [{ key: 'max_length', value: '2048' }],
+  learningRate: '1e-5',
+  epochs: 1,
+  batchSize: 1,
+  kvParams: [{ key: 'max_length', value: '1024' }],
   poolId: '',
   gpuCount: 1,
-  cpu: 8,
+  cpu: 4,
   memory: 32,
 })
 

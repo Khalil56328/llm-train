@@ -256,6 +256,15 @@ export function useTrainOptions() {
     operatorList.value.map((o: Operator) => {
       const scopes = resolveScopes(o)
       const versions = operatorVersionMap.value[o.id] || []
+      // 算子级公开性：与算子广场可见性规则一致（后端 is_public=true 筛选同样按
+      // “存在至少一个公开版本即视为公开”计算），算子自身公开或存在公开版本，
+      // 都应出现在「公开」分组下，与“基础模型”字段的展示保持一致。
+      if (
+        !scopes.includes('public') &&
+        versions.some((v) => v.scope.includes('public'))
+      ) {
+        scopes.push('public')
+      }
       return {
         id: o.id,
         name: o.name,

@@ -254,9 +254,9 @@ const form = reactive({
   kvParams: [] as { key: string; value: string }[],
   // 资源配置
   poolId: '',
-  gpuCount: 2,
-  cpu: 16,
-  memory: 64,
+  gpuCount: 1,
+  cpu: 4,
+  memory: 32,
 })
 
 function goBack() {

@@ -57,10 +57,10 @@
                 </el-form-item>
               </el-col>
             </el-row>
-            <el-form-item label="SFT模型" v-if="form.alignMethod === 'rlhf'">
+            <el-form-item label="SFT模型" label-width="91.45px" v-if="form.alignMethod === 'rlhf'">
               <HierarchicalSelect v-model="form.sftModelId" :data="modelTree" placeholder="请选择已训练好的SFT模型" clearable />
-              <div class="form-tip">RLHF方法需要先训练SFT模型，再基于SFT模型进行对齐训练</div>
             </el-form-item>
+            <div class="form-tip">RLHF方法需要先训练SFT模型，再基于SFT模型进行对齐训练</div>
           </div>
         </div>
       </div>
@@ -79,23 +79,23 @@
                 </el-form-item>
               </el-col>
               <el-col :span="12">
-                <el-form-item label="基础模型" required>
-                  <HierarchicalSelect v-model="form.baseModel" :data="modelTree" placeholder="请选择基础模型" />
+                <el-form-item label="训练方法">
+                  <el-radio-group v-model="form.method">
+                    <el-radio value="lora">LoRA</el-radio>
+                    <el-radio value="full">全量更新</el-radio>
+                  </el-radio-group>
                 </el-form-item>
               </el-col>
             </el-row>
             <el-row :gutter="20">
               <el-col :span="12">
-                <el-form-item label="算子" required>
-                  <HierarchicalSelect v-model="form.operator" :data="operatorTree" placeholder="请选择算子" />
+                <el-form-item label="基础模型" required>
+                  <HierarchicalSelect v-model="form.baseModel" :data="modelTree" placeholder="请选择基础模型" />
                 </el-form-item>
               </el-col>
               <el-col :span="12">
-                <el-form-item label="训练方法">
-                  <el-radio-group v-model="form.method">
-                    <el-radio value="full">全量更新</el-radio>
-                    <el-radio value="lora">LoRA</el-radio>
-                  </el-radio-group>
+                <el-form-item label="算子" required>
+                  <HierarchicalSelect v-model="form.operator" :data="operatorTree" placeholder="请选择算子" />
                 </el-form-item>
               </el-col>
             </el-row>
@@ -240,15 +240,15 @@ const form = reactive({
   operator: '',
   learningRate: '1e-5',
   epochs: 1,
-  batchSize: 4,
-  maxLength: 4096,
-  gradAccumSteps: 8,
+  batchSize: 1,
+  maxLength: 1024,
+  gradAccumSteps: 1,
   klCoeff: '0.1',
   kvParams: [] as { key: string; value: string }[],
   poolId: '',
-  gpuCount: 4,
-  cpu: 32,
-  memory: 128,
+  gpuCount: 1,
+  cpu: 4,
+  memory: 32,
 })
 
 function goBack() {
@@ -261,7 +261,7 @@ function buildPayload() {
     taskType: 'alignment',
     subType: form.alignMethod.toUpperCase(),
     description: form.description,
-    baseModelId: form.baseModel.split('/')[0] || form.baseModel,
+    baseModelId: form.baseModel.split('/')[1] || form.baseModel,
     baseModelVersion: form.baseModel.split('/')[2] || '',
     baseModelName: findModelName(form.baseModel.split('/')[1] || form.baseModel),
     operatorId: form.operator.split('/')[1] || form.operator,
@@ -364,6 +364,5 @@ onMounted(async () => {
 .form-tip {
   font-size: 12px;
   color: $text-secondary;
-  margin-top: 4px;
 }
 </style>

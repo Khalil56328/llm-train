@@ -66,8 +66,8 @@
               <el-col :span="12">
                 <el-form-item label="训练方法" required>
                   <el-radio-group v-model="form.method">
-                    <el-radio value="full">全量更新</el-radio>
                     <el-radio value="lora">LoRA微调</el-radio>
+                    <el-radio value="full">全量更新</el-radio>
                   </el-radio-group>
                 </el-form-item>
               </el-col>
@@ -90,44 +90,37 @@
         <div class="form-section">
           <div class="section-title">参数配置</div>
           <div class="section-body">
-            <el-alert
-              type="info"
-              :closable="false"
-              show-icon
-              title="当前为功能演示模式，训练超参已按单卡最低标准锁定"
-              style="margin-bottom: 16px"
-            />
             <el-row :gutter="20">
               <el-col :span="8">
-                <el-form-item label="学习率（最低标准）">
-                  <el-input v-model="form.learningRate" disabled />
+                <el-form-item label="学习率">
+                  <el-input v-model="form.learningRate" />
                 </el-form-item>
               </el-col>
               <el-col :span="8">
-                <el-form-item label="训练轮数（最低标准）">
-                  <el-input :model-value="String(form.epochs)" disabled />
+                <el-form-item label="训练轮数">
+                  <el-input :model-value="String(form.epochs)" />
                 </el-form-item>
               </el-col>
               <el-col :span="8">
-                <el-form-item label="批次大小（最低标准）">
-                  <el-input :model-value="String(form.batchSize)" disabled />
+                <el-form-item label="批次大小">
+                  <el-input :model-value="String(form.batchSize)" />
                 </el-form-item>
               </el-col>
             </el-row>
             <el-row :gutter="20">
               <el-col :span="8">
-                <el-form-item label="最大序列长度（最低标准）">
-                  <el-input :model-value="String(form.maxLength)" disabled />
+                <el-form-item label="最大序列长度">
+                  <el-input :model-value="String(form.maxLength)" />
                 </el-form-item>
               </el-col>
               <el-col :span="8">
-                <el-form-item label="梯度累积步数（最低标准）">
-                  <el-input :model-value="String(form.gradAccumSteps)" disabled />
+                <el-form-item label="梯度累积步数">
+                  <el-input :model-value="String(form.gradAccumSteps)" />
                 </el-form-item>
               </el-col>
               <el-col :span="8">
-                <el-form-item label="预热步数（最低标准）">
-                  <el-input :model-value="String(form.warmupSteps)" disabled />
+                <el-form-item label="预热步数">
+                  <el-input :model-value="String(form.warmupSteps)" />
                 </el-form-item>
               </el-col>
             </el-row>
@@ -141,13 +134,6 @@
         <div class="form-section">
           <div class="section-title">资源配置</div>
           <div class="section-body">
-            <el-alert
-              type="info"
-              :closable="false"
-              show-icon
-              title="单卡演示模式：资源已锁定为最低标准"
-              style="margin-bottom: 16px"
-            />
             <el-row :gutter="20">
               <el-col :span="12">
                 <el-form-item label="资源池" required>
@@ -157,20 +143,20 @@
                 </el-form-item>
               </el-col>
               <el-col :span="12">
-                <el-form-item label="GPU数量（单卡）" required>
-                  <el-input :model-value="String(form.gpuCount)" disabled />
+                <el-form-item label="GPU数量" required>
+                  <el-input :model-value="String(form.gpuCount)" />
                 </el-form-item>
               </el-col>
             </el-row>
             <el-row :gutter="20">
               <el-col :span="12">
-                <el-form-item label="CPU(核)（最低标准）">
-                  <el-input :model-value="String(form.cpu)" disabled />
+                <el-form-item label="CPU(核)">
+                  <el-input :model-value="String(form.cpu)" />
                 </el-form-item>
               </el-col>
               <el-col :span="12">
-                <el-form-item label="内存(GB)（最低标准）">
-                  <el-input :model-value="String(form.memory)" disabled />
+                <el-form-item label="内存(GB)">
+                  <el-input :model-value="String(form.memory)" />
                 </el-form-item>
               </el-col>
             </el-row>
@@ -234,7 +220,7 @@ const form = reactive({
   description: '',
   datasetId: '',
   framework: 'ms-swift',
-  method: 'full',
+  method: 'lora',
   baseModel: '',
   operator: '',
   learningRate: '1e-5',
@@ -246,7 +232,7 @@ const form = reactive({
   kvParams: [] as { key: string; value: string }[],
   poolId: '',
   gpuCount: 1,
-  cpu: 8,
+  cpu: 4,
   memory: 32,
 })
 
