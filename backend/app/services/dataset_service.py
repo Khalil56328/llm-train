@@ -1,0 +1,512 @@
+"""数据集服务"""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import select, func, delete, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.storage import delete_object, iter_object_chunks
+from app.models.dataset import Dataset, DatasetVersion, DatasetFile
+from app.models.user import User
+
+# 北京时区
+_BJ = ZoneInfo("Asia/Shanghai")
+
+
+def _uuid() -> str:
+    return uuid.uuid4().hex
+
+
+def _now() -> datetime:
+    """返回 UTC 时间（naive），与 MySQL 服务器 UTC 时区保持一致"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _fmt_time(dt: Optional[datetime]) -> Optional[str]:
+    """naive datetime 视为 UTC，转换为北京时间（+08:00）ISO 字符串"""
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_BJ).isoformat()
+
+
+class DatasetService:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def list_datasets(
+        self,
+        *,
+        page_index: int = 1,
+        page_size: int = 20,
+        keyword: Optional[str] = None,
+        category: Optional[str] = None,
+        data_type: Optional[str] = None,
+        status: Optional[str] = None,
+        dataset_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        is_public: Optional[bool] = None,
+    ) -> Dict:
+        q = select(Dataset)
+        count_q = select(func.count(Dataset.id))
+
+        if keyword:
+            f = Dataset.name.contains(keyword)
+            q, count_q = q.where(f), count_q.where(f)
+        if category:
+            q, count_q = q.where(Dataset.category == category), count_q.where(Dataset.category == category)
+        if data_type:
+            q, count_q = q.where(Dataset.data_type == data_type), count_q.where(Dataset.data_type == data_type)
+        if status:
+            q, count_q = q.where(Dataset.status == status), count_q.where(Dataset.status == status)
+        if dataset_type:
+            q, count_q = q.where(Dataset.type == dataset_type), count_q.where(Dataset.type == dataset_type)
+        if owner_id:
+            q, count_q = q.where(Dataset.owner_id == owner_id), count_q.where(Dataset.owner_id == owner_id)
+        if is_public is not None:
+            q, count_q = q.where(Dataset.is_public == is_public), count_q.where(Dataset.is_public == is_public)
+
+        total = (await self.db.execute(count_q)).scalar() or 0
+        rows = (await self.db.execute(
+            q.order_by(Dataset.created_at.desc())
+             .offset((page_index - 1) * page_size).limit(page_size)
+        )).scalars().all()
+
+        # 批量统计文件数量，避免 N+1
+        file_counts = {}
+        if rows:
+            ids = [d.id for d in rows]
+            cnt_result = await self.db.execute(
+                select(DatasetFile.dataset_id, func.count(DatasetFile.id), func.sum(DatasetFile.size))
+                .where(DatasetFile.dataset_id.in_(ids), DatasetFile.status == "success")
+                .group_by(DatasetFile.dataset_id)
+            )
+            for dataset_id, count, size in cnt_result.all():
+                file_counts[dataset_id] = {"fileCount": count, "totalSize": size or 0}
+
+        # 批量解析归属用户显示名，避免 N+1
+        owner_map = await self._resolve_owner_names(
+            [d.owner_id for d in rows if d.owner_id]
+        )
+
+        return {
+            "list": [
+                self._dataset_with_files(
+                    d, file_counts, owner_name=owner_map.get(d.owner_id or "")
+                )
+                for d in rows
+            ],
+            "total": total,
+            "pageIndex": page_index,
+            "pageSize": page_size,
+        }
+
+    def _dataset_with_files(self, d: Dataset, file_counts: Dict, owner_name: Optional[str] = None) -> Dict:
+        result = _dataset_to_dict(d, owner_name=owner_name)
+        stats = file_counts.get(d.id, {})
+        result["fileCount"] = stats.get("fileCount", 0)
+        if stats.get("totalSize"):
+            result["size"] = stats["totalSize"]
+        return result
+
+    async def get_dataset(self, dataset_id: str) -> Optional[Dict]:
+        result = await self.db.execute(select(Dataset).where(Dataset.id == dataset_id))
+        d = result.scalar_one_or_none()
+        if not d:
+            return None
+        owner_map = await self._resolve_owner_names([d.owner_id] if d.owner_id else [])
+        r = _dataset_to_dict(d, owner_name=owner_map.get(d.owner_id or ""))
+        # 附加文件统计
+        fc = (await self.db.execute(
+            select(func.count(DatasetFile.id))
+            .where(DatasetFile.dataset_id == dataset_id, DatasetFile.status == "success")
+        )).scalar() or 0
+        fs = (await self.db.execute(
+            select(func.sum(DatasetFile.size))
+            .where(DatasetFile.dataset_id == dataset_id, DatasetFile.status == "success")
+        )).scalar() or 0
+        r["fileCount"] = fc
+        r["size"] = fs
+        return r
+
+    async def create_dataset(self, data: Dict, *, owner_id: str, owner_name: Optional[str] = None) -> Dict:
+        d = Dataset(
+            id=_uuid(),
+            name=data.get("name"),
+            category=data.get("category"),
+            type=data.get("type", "training"),
+            data_type=data.get("data_type"),
+            eval_dimensions=data.get("eval_dimensions"),
+            description=data.get("description"),
+            source=data.get("source", "upload"),
+            storage_path=data.get("storage_path"),
+            size=data.get("size", 0),
+            sample_count=data.get("sample_count", 0),
+            is_public=data.get("is_public", False),
+            owner_id=owner_id,
+            status=data.get("status", "ready"),
+            created_at=_now(),
+            updated_at=_now(),
+        )
+        self.db.add(d)
+        await self.db.flush()
+        await self.db.refresh(d)
+        return _dataset_to_dict(d, owner_name=owner_name)
+
+    async def update_dataset(self, dataset_id: str, data: Dict) -> Optional[Dict]:
+        result = await self.db.execute(select(Dataset).where(Dataset.id == dataset_id))
+        d = result.scalar_one_or_none()
+        if not d:
+            return None
+        _ALLOWED = {"name", "category", "data_type", "eval_dimensions", "description",
+                     "source", "storage_path", "is_public", "status"}
+        for k, v in data.items():
+            if k in _ALLOWED and v is not None:
+                setattr(d, k, v)
+        d.updated_at = _now()
+        await self.db.flush()
+        await self.db.refresh(d)
+        return _dataset_to_dict(d)
+
+    async def delete_dataset(self, dataset_id: str) -> bool:
+        result = await self.db.execute(select(Dataset).where(Dataset.id == dataset_id))
+        d = result.scalar_one_or_none()
+        if not d:
+            return False
+        await self.db.execute(delete(DatasetVersion).where(DatasetVersion.dataset_id == dataset_id))
+        await self.db.delete(d)
+        await self.db.flush()
+        return True
+
+    # ========== 版本 ==========
+    async def list_versions(self, dataset_id: str) -> List[Dict]:
+        result = await self.db.execute(
+            select(DatasetVersion).where(DatasetVersion.dataset_id == dataset_id)
+                .order_by(DatasetVersion.created_at.desc())
+        )
+        return [_version_to_dict(v) for v in result.scalars().all()]
+
+    async def create_version(self, dataset_id: str, data: Dict) -> Optional[Dict]:
+        result = await self.db.execute(select(Dataset).where(Dataset.id == dataset_id))
+        if not result.scalar_one_or_none():
+            return None
+        v = DatasetVersion(
+            id=_uuid(),
+            dataset_id=dataset_id,
+            version=data.get("version", "v1"),
+            storage_path=data.get("storage_path"),
+            is_default=data.get("is_default", False),
+            created_at=_now(),
+        )
+        self.db.add(v)
+        await self.db.flush()
+        await self.db.refresh(v)
+        return _version_to_dict(v)
+
+    async def delete_version(self, version_id: str) -> bool:
+        result = await self.db.execute(select(DatasetVersion).where(DatasetVersion.id == version_id))
+        v = result.scalar_one_or_none()
+        if not v:
+            return False
+        await self.db.delete(v)
+        await self.db.flush()
+        return True
+
+    # ========== 文件 ==========
+    async def list_files(
+        self,
+        dataset_id: str,
+        *,
+        page_index: int = 1,
+        page_size: int = 10,
+        keyword: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> Dict:
+        result = await self.db.execute(select(Dataset).where(Dataset.id == dataset_id))
+        if not result.scalar_one_or_none():
+            return None
+
+        q = select(DatasetFile).where(DatasetFile.dataset_id == dataset_id)
+        count_q = select(func.count(DatasetFile.id)).where(DatasetFile.dataset_id == dataset_id)
+
+        if keyword:
+            f = DatasetFile.file_name.contains(keyword)
+            q, count_q = q.where(f), count_q.where(f)
+        if status:
+            q, count_q = q.where(DatasetFile.status == status), count_q.where(DatasetFile.status == status)
+
+        total = (await self.db.execute(count_q)).scalar() or 0
+        rows = (await self.db.execute(
+            q.order_by(DatasetFile.created_at.desc())
+             .offset((page_index - 1) * page_size).limit(page_size)
+        )).scalars().all()
+
+        return {
+            "list": [_file_to_dict(f) for f in rows],
+            "total": total,
+            "pageIndex": page_index,
+            "pageSize": page_size,
+        }
+
+    async def get_file_stats(self, dataset_id: str) -> Dict:
+        """获取数据集文件统计信息"""
+        result = await self.db.execute(select(Dataset).where(Dataset.id == dataset_id))
+        if not result.scalar_one_or_none():
+            return None
+
+        total = (await self.db.execute(
+            select(func.count(DatasetFile.id)).where(DatasetFile.dataset_id == dataset_id)
+        )).scalar() or 0
+        success = (await self.db.execute(
+            select(func.count(DatasetFile.id))
+            .where(DatasetFile.dataset_id == dataset_id, DatasetFile.status == "success")
+        )).scalar() or 0
+        failed = (await self.db.execute(
+            select(func.count(DatasetFile.id))
+            .where(DatasetFile.dataset_id == dataset_id, DatasetFile.status == "failed")
+        )).scalar() or 0
+        processing = (await self.db.execute(
+            select(func.count(DatasetFile.id))
+            .where(DatasetFile.dataset_id == dataset_id, DatasetFile.status == "processing")
+        )).scalar() or 0
+        total_size = (await self.db.execute(
+            select(func.sum(DatasetFile.size))
+            .where(DatasetFile.dataset_id == dataset_id, DatasetFile.status == "success")
+        )).scalar() or 0
+        return {
+            "fileCount": total,
+            "success": success,
+            "failed": failed,
+            "processing": processing,
+            "totalSize": total_size,
+        }
+
+    async def create_file(self, dataset_id: str, data: Dict) -> Optional[Dict]:
+        result = await self.db.execute(select(Dataset).where(Dataset.id == dataset_id))
+        if not result.scalar_one_or_none():
+            return None
+        f = DatasetFile(
+            id=_uuid(),
+            dataset_id=dataset_id,
+            file_name=data.get("file_name"),
+            source=data.get("source", "local_upload"),
+            status=data.get("status", "processing"),
+            size=data.get("size", 0),
+            storage_path=data.get("storage_path"),
+            batch_id=data.get("batch_id"),
+            sample_count=data.get("sample_count", 0),
+            error_message=data.get("error_message"),
+            created_at=_now(),
+            updated_at=_now(),
+        )
+        self.db.add(f)
+        await self.db.flush()
+        await self.db.refresh(f)
+        await self._sync_dataset_size(dataset_id)
+        return _file_to_dict(f)
+
+    async def get_file(self, file_id: str) -> Optional[Dict]:
+        result = await self.db.execute(select(DatasetFile).where(DatasetFile.id == file_id))
+        f = result.scalar_one_or_none()
+        return _file_to_dict(f) if f else None
+
+    async def delete_file(self, file_id: str) -> bool:
+        result = await self.db.execute(select(DatasetFile).where(DatasetFile.id == file_id))
+        f = result.scalar_one_or_none()
+        if not f:
+            return False
+        dataset_id = f.dataset_id
+        storage_path = f.storage_path
+        await self.db.delete(f)
+        await self.db.flush()
+        await self._sync_dataset_size(dataset_id)
+        # 同步删除物理文件
+        if storage_path:
+            delete_object(storage_path)
+        return True
+
+    async def list_collect_tasks(self, dataset_id: str) -> Optional[List[Dict]]:
+        """采集任务：按批次(batch_id)聚合。
+
+        任务名 = 批次上传时间；状态 = 批次内所有文件聚合
+        （任一失败则 failed，任一处理中则 processing，否则 success）；
+        采集方式 = 该批次文件的数据来源(source)。
+        """
+        result = await self.db.execute(select(Dataset).where(Dataset.id == dataset_id))
+        if not result.scalar_one_or_none():
+            return None
+
+        rows = (await self.db.execute(
+            select(DatasetFile)
+            .where(DatasetFile.dataset_id == dataset_id, DatasetFile.batch_id.isnot(None))
+            .order_by(DatasetFile.created_at.desc())
+        )).scalars().all()
+
+        groups: Dict[str, List[DatasetFile]] = {}
+        for f in rows:
+            groups.setdefault(f.batch_id, []).append(f)
+
+        tasks = []
+        for batch_id, files in groups.items():
+            files_sorted = sorted(files, key=lambda x: x.created_at or _now())
+            status = "success"
+            if any(f.status == "failed" for f in files):
+                status = "failed"
+            elif any(f.status == "processing" for f in files):
+                status = "processing"
+            tasks.append({
+                "batchId": batch_id,
+                "taskName": _fmt_time(files_sorted[0].created_at),
+                "source": files_sorted[0].source,
+                "status": status,
+                "fileCount": len(files),
+                "successCount": sum(1 for f in files if f.status == "success"),
+                "failedCount": sum(1 for f in files if f.status == "failed"),
+            })
+        return tasks
+
+    @staticmethod
+    def count_file_rows(storage_path: str, file_name: str) -> int:
+        """结合 MS-Swift 支持的数据集格式统计样本行数。
+
+        - jsonl/json: 每行一条样本
+        - csv: 行数减表头
+        - txt: 非空行数
+        - 其余格式（parquet/zip 等）无法按行统计，返回 0
+        """
+        ext = Path(file_name).suffix.lower()
+        if ext not in (".jsonl", ".json", ".csv", ".txt"):
+            return 0
+
+        newlines = 0
+        last_chunk = b""
+        empty = True
+        for chunk in iter_object_chunks(storage_path):
+            newlines += chunk.count(b"\n")
+            last_chunk = chunk
+            if chunk.strip():
+                empty = False
+
+        if empty:
+            return 0
+
+        # 文件末尾无换行符时补计一行
+        if not last_chunk.endswith(b"\n"):
+            newlines += 1
+
+        if ext == ".csv":
+            # 去掉表头行
+            return max(newlines - 1, 0)
+        return newlines
+
+    async def copy_files(self, source_id: str, target_id: str) -> int:
+        result = await self.db.execute(select(DatasetFile).where(DatasetFile.dataset_id == source_id))
+        rows = result.scalars().all()
+        for f in rows:
+            self.db.add(DatasetFile(
+                id=_uuid(),
+                dataset_id=target_id,
+                file_name=f.file_name,
+                source=f.source,
+                status=f.status,
+                size=f.size,
+                storage_path=f.storage_path,
+                batch_id=None,
+                sample_count=f.sample_count,
+                error_message=f.error_message,
+                created_at=_now(),
+                updated_at=_now(),
+            ))
+        await self.db.flush()
+        await self._sync_dataset_size(target_id)
+        return len(rows)
+
+    async def _resolve_owner_names(self, owner_ids: List[str]) -> Dict[str, str]:
+        """根据用户 ID 批量解析显示名（昵称优先，回退用户名）"""
+        if not owner_ids:
+            return {}
+        result = await self.db.execute(
+            select(User.id, User.nickname, User.username).where(
+                User.id.in_(owner_ids)
+            )
+        )
+        return {
+            uid: (nickname or username or uid)
+            for uid, nickname, username in result.all()
+        }
+
+    async def _sync_dataset_size(self, dataset_id: str) -> None:
+        total_size = (await self.db.execute(
+            select(func.sum(DatasetFile.size)).where(
+                DatasetFile.dataset_id == dataset_id,
+                DatasetFile.status == "success",
+            )
+        )).scalar() or 0
+        # 样本数 = 成功文件的样本行数总和（而非文件个数）
+        sample_count = (await self.db.execute(
+            select(func.sum(DatasetFile.sample_count)).where(
+                DatasetFile.dataset_id == dataset_id,
+                DatasetFile.status == "success",
+            )
+        )).scalar() or 0
+        await self.db.execute(
+            update(Dataset)
+            .where(Dataset.id == dataset_id)
+            .values(size=total_size, sample_count=sample_count)
+        )
+
+
+def _dataset_to_dict(d: Dataset, owner_name: Optional[str] = None) -> Dict:
+    return {
+        "id": d.id,
+        "name": d.name,
+        "category": d.category,
+        "type": d.type,
+        "dataType": d.data_type,
+        "evalDimensions": d.eval_dimensions,
+        "description": d.description,
+        "source": d.source,
+        "storagePath": d.storage_path,
+        "size": d.size,
+        "sampleCount": d.sample_count,
+        "isPublic": d.is_public,
+        "ownerId": d.owner_id,
+        "ownerName": owner_name,
+        "status": d.status,
+        "createdAt": _fmt_time(d.created_at),
+        "updatedAt": _fmt_time(d.updated_at),
+    }
+
+
+def _version_to_dict(v: DatasetVersion) -> Dict:
+    return {
+        "id": v.id,
+        "datasetId": v.dataset_id,
+        "version": v.version,
+        "storagePath": v.storage_path,
+        "isDefault": v.is_default,
+        "createdAt": _fmt_time(v.created_at),
+    }
+
+
+def _file_to_dict(f: DatasetFile) -> Dict:
+    return {
+        "id": f.id,
+        "datasetId": f.dataset_id,
+        "fileName": f.file_name,
+        "source": f.source,
+        "status": f.status,
+        "size": f.size,
+        "storagePath": f.storage_path,
+        "batchId": f.batch_id,
+        "sampleCount": f.sample_count,
+        "errorMessage": f.error_message,
+        "createdAt": _fmt_time(f.created_at),
+        "updatedAt": _fmt_time(f.updated_at),
+    }

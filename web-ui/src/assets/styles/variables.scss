@@ -1,0 +1,75 @@
+// ============================================
+// 大模型训推平台 - 全局 SCSS 变量
+// 严格对齐样例截图配色方案
+// ============================================
+
+// === 主色系 (红色主题，对齐样例截图 #E63946) ===
+$color-primary: #e63946;
+$color-primary-light: #f56c6c;
+$color-primary-lighter: #ffeded;
+$color-primary-dark: #c92a3a;
+$color-primary-opacity: rgba(230, 57, 70, 0.08);
+
+// === 辅助色 ===
+$color-success: #67c23a;
+$color-warning: #e6a23c;
+$color-danger: #f56c6c;
+$color-info: #909399;
+
+// === 文字色 ===
+$text-primary: #303133;
+$text-regular: #606266;
+$text-secondary: #909399;
+$text-placeholder: #c0c4cc;
+
+// === 边框色 ===
+$border-color: #dcdfe6;
+$border-color-light: #e4e7ed;
+$border-color-lighter: #ebeef5;
+$border-color-extra-light: #f2f6fc;
+
+// === 背景色 ===
+$bg-color: #f5f7fa;
+$bg-color-white: #ffffff;
+$bg-color-light: #fafafa;
+$bg-card-header: #f5f7fa;
+$bg-sidebar: #1a1a2e;
+$sidebar-text: #a0aec0;
+$sidebar-active-text: #ffffff;
+$sidebar-active-bg: rgba(230, 57, 70, 0.15);
+
+// === 布局尺寸 ===
+$sidebar-width: 220px;
+$sidebar-collapsed-width: 64px;
+$header-height: 56px;
+$breadcrumb-height: 40px;
+$content-padding: 20px;
+
+// === 圆角 ===
+$border-radius-base: 4px;
+$border-radius-small: 2px;
+$border-radius-large: 8px;
+
+// === 阴影 ===
+$box-shadow-light: 0 2px 12px rgba(0, 0, 0, 0.06);
+$box-shadow-base: 0 2px 4px rgba(0, 0, 0, 0.08);
+
+// === 字体 ===
+$font-size-large: 16px;
+$font-size-base: 14px;
+$font-size-small: 13px;
+$font-size-mini: 12px;
+
+// === 过渡 ===
+$transition-base: all 0.3s cubic-bezier(0.645, 0.045, 0.355, 1);
+
+// === Element Plus 主题覆盖 ===
+:root {
+  --el-color-primary: #{$color-primary};
+  --el-color-primary-light-3: #{lighten($color-primary, 10%)};
+  --el-color-primary-light-5: #{lighten($color-primary, 15%)};
+  --el-color-primary-light-7: #{lighten($color-primary, 20%)};
+  --el-color-primary-light-8: #{lighten($color-primary, 25%)};
+  --el-color-primary-light-9: #{lighten($color-primary, 30%)};
+  --el-color-primary-dark-2: #{darken($color-primary, 10%)};
+}

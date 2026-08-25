@@ -1,0 +1,16 @@
+[Unit]
+Description=LLM Train Platform Celery Worker
+After=network.target mysql.service redis-server.service
+Wants=mysql.service redis-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_DIR__/backend
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__PROJECT_DIR__/backend/.venv/bin/python -m celery -A app.tasks.worker:celery_app worker --loglevel=info
+Restart=on-failure
+RestartSec=5
+User=__RUN_USER__
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,237 @@
+- generic [ref=e46]:
+  - generic [ref=e47]:
+    - generic [ref=e48] [cursor=pointer]:
+      - img [ref=e50]:
+        - generic [ref=e52]: AI
+      - generic [ref=e53]: 训推平台
+    - menubar [ref=e55]:
+      - menuitem "首页" [ref=e56] [cursor=pointer]:
+        - img [ref=e58]
+        - text: 首页
+      - menuitem "算子中心" [expanded] [ref=e60]:
+        - generic [ref=e61] [cursor=pointer]:
+          - img [ref=e63]
+          - generic [ref=e65]: 算子中心
+          - img [ref=e67]
+        - menu [ref=e324]:
+          - menuitem "算子管理" [ref=e325] [cursor=pointer]:
+            - generic [ref=e327]: 算子管理
+          - menuitem "算子广场" [ref=e328] [cursor=pointer]:
+            - generic [ref=e330]: 算子广场
+      - menuitem "数据中心" [ref=e69]:
+        - generic [ref=e70] [cursor=pointer]:
+          - img [ref=e72]
+          - generic [ref=e74]: 数据中心
+          - img [ref=e76]
+      - menuitem "模型训练" [ref=e78]:
+        - generic [ref=e79] [cursor=pointer]:
+          - img [ref=e81]
+          - generic [ref=e84]: 模型训练
+          - img [ref=e86]
+      - menuitem "模型中心" [ref=e88]:
+        - generic [ref=e89] [cursor=pointer]:
+          - img [ref=e91]
+          - generic [ref=e93]: 模型中心
+          - img [ref=e95]
+      - menuitem "模型服务" [ref=e97]:
+        - generic [ref=e98] [cursor=pointer]:
+          - img [ref=e100]
+          - generic [ref=e102]: 模型服务
+          - img [ref=e104]
+      - menuitem "运维中心" [ref=e106]:
+        - generic [ref=e107] [cursor=pointer]:
+          - img [ref=e109]
+          - generic [ref=e111]: 运维中心
+          - img [ref=e113]
+    - img [ref=e117] [cursor=pointer]
+  - generic [ref=e119]:
+    - generic [ref=e120]:
+      - navigation "Breadcrumb" [ref=e122]:
+        - generic [ref=e123]:
+          - link [ref=e124]:
+            - img [ref=e126]
+          - text: /
+        - generic [ref=e128]:
+          - link "算子中心" [ref=e331]
+          - text: /
+        - link "算子管理" [ref=e333]
+      - generic [ref=e130]:
+        - generic [ref=e131]:
+          - img [ref=e134] [cursor=pointer]
+          - superscript [ref=e138]: "3"
+        - button "admin" [ref=e140] [cursor=pointer]:
+          - img [ref=e143]
+          - generic [ref=e145]: admin
+          - img [ref=e147]
+    - generic [ref=e334]:
+      - generic [ref=e336]:
+        - generic [ref=e337]:
+          - generic [ref=e338]: 算子管理
+          - generic [ref=e339]: 管理和维护训练、推理等算子，支持版本管理和参数配置。
+        - img [ref=e341]
+      - generic [ref=e345]:
+        - generic [ref=e346]:
+          - generic [ref=e348]:
+            - img [ref=e351]
+            - textbox "请输入关键词搜索" [ref=e353]
+          - generic [ref=e356] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e358]
+              - generic [ref=e359]: 算子类型
+            - img [ref=e362]
+        - generic [ref=e364]:
+          - button "查询" [ref=e365] [cursor=pointer]:
+            - generic [ref=e366]:
+              - img [ref=e368]
+              - generic [ref=e370]: 查询
+          - button "重置" [ref=e371] [cursor=pointer]:
+            - generic [ref=e372]:
+              - img [ref=e374]
+              - generic [ref=e376]: 重置
+          - button "新增" [ref=e377] [cursor=pointer]:
+            - generic [ref=e378]:
+              - img [ref=e380]
+              - generic [ref=e382]: 新增
+      - generic [ref=e383]:
+        - generic [ref=e385]:
+          - table [ref=e387]:
+            - rowgroup [ref=e398]:
+              - row "算子名称 算子类型 版本数 描述 归属用户 创建时间 更新时间 操作" [ref=e399]:
+                - columnheader [ref=e400]
+                - columnheader "算子名称" [ref=e401]:
+                  - generic [ref=e402]: 算子名称
+                - columnheader "算子类型" [ref=e403]:
+                  - generic [ref=e404]: 算子类型
+                - columnheader "版本数" [ref=e405]:
+                  - generic [ref=e406]: 版本数
+                - columnheader "描述" [ref=e407]:
+                  - generic [ref=e408]: 描述
+                - columnheader "归属用户" [ref=e409]:
+                  - generic [ref=e410]: 归属用户
+                - columnheader "创建时间" [ref=e411]:
+                  - generic [ref=e412]: 创建时间
+                - columnheader "更新时间" [ref=e413]:
+                  - generic [ref=e414]: 更新时间
+                - columnheader "操作" [ref=e415]:
+                  - generic [ref=e416]: 操作
+          - table [ref=e421]:
+            - rowgroup [active] [ref=e432]:
+              - row "Expand this row llmtrain 预训练 1 zhadmin 2026/8/10 15:41:52 2026/8/10 15:41:52 详情 更多" [ref=e433]:
+                - cell "Expand this row" [ref=e434]:
+                  - button "Expand this row" [ref=e436] [cursor=pointer]:
+                    - img [ref=e438]
+                - cell "llmtrain" [ref=e440]:
+                  - generic [ref=e441]: llmtrain
+                - cell "预训练" [ref=e442]:
+                  - generic [ref=e443]: 预训练
+                - cell "1" [ref=e444]:
+                  - generic [ref=e445]: "1"
+                - cell [ref=e446]
+                - cell "zhadmin" [ref=e447]:
+                  - generic [ref=e448]: zhadmin
+                - cell "2026/8/10 15:41:52" [ref=e449]:
+                  - generic [ref=e450]: 2026/8/10 15:41:52
+                - cell "2026/8/10 15:41:52" [ref=e451]:
+                  - generic [ref=e452]: 2026/8/10 15:41:52
+                - cell "详情 更多" [ref=e453]:
+                  - generic [ref=e454]:
+                    - button "详情" [ref=e455] [cursor=pointer]:
+                      - generic [ref=e456]: 详情
+                    - button "更多" [ref=e458] [cursor=pointer]:
+                      - generic [ref=e459]:
+                        - text: 更多
+                        - img [ref=e461]
+              - row "Expand this row llm-lora-weiliao 大模型微调 0 zhadmin 2026/8/10 15:41:52 2026/8/10 15:41:52 详情 更多" [ref=e463]:
+                - cell "Expand this row" [ref=e464]:
+                  - button "Expand this row" [ref=e466] [cursor=pointer]:
+                    - img [ref=e468]
+                - cell "llm-lora-weiliao" [ref=e470]:
+                  - generic [ref=e471]: llm-lora-weiliao
+                - cell "大模型微调" [ref=e472]:
+                  - generic [ref=e473]: 大模型微调
+                - cell "0" [ref=e474]:
+                  - generic [ref=e475]: "0"
+                - cell [ref=e476]
+                - cell "zhadmin" [ref=e477]:
+                  - generic [ref=e478]: zhadmin
+                - cell "2026/8/10 15:41:52" [ref=e479]:
+                  - generic [ref=e480]: 2026/8/10 15:41:52
+                - cell "2026/8/10 15:41:52" [ref=e481]:
+                  - generic [ref=e482]: 2026/8/10 15:41:52
+                - cell "详情 更多" [ref=e483]:
+                  - generic [ref=e484]:
+                    - button "详情" [ref=e485] [cursor=pointer]:
+                      - generic [ref=e486]: 详情
+                    - button "更多" [ref=e488] [cursor=pointer]:
+                      - generic [ref=e489]:
+                        - text: 更多
+                        - img [ref=e491]
+              - row "Expand this row ms-swift-gkd 模型蒸馏 0 test zhadmin 2026/8/10 15:41:52 2026/8/10 15:41:52 详情 更多" [ref=e493]:
+                - cell "Expand this row" [ref=e494]:
+                  - button "Expand this row" [ref=e496] [cursor=pointer]:
+                    - img [ref=e498]
+                - cell "ms-swift-gkd" [ref=e500]:
+                  - generic [ref=e501]: ms-swift-gkd
+                - cell "模型蒸馏" [ref=e502]:
+                  - generic [ref=e503]: 模型蒸馏
+                - cell "0" [ref=e504]:
+                  - generic [ref=e505]: "0"
+                - cell "test" [ref=e506]:
+                  - generic [ref=e507]: test
+                - cell "zhadmin" [ref=e508]:
+                  - generic [ref=e509]: zhadmin
+                - cell "2026/8/10 15:41:52" [ref=e510]:
+                  - generic [ref=e511]: 2026/8/10 15:41:52
+                - cell "2026/8/10 15:41:52" [ref=e512]:
+                  - generic [ref=e513]: 2026/8/10 15:41:52
+                - cell "详情 更多" [ref=e514]:
+                  - generic [ref=e515]:
+                    - button "详情" [ref=e516] [cursor=pointer]:
+                      - generic [ref=e517]: 详情
+                    - button "更多" [ref=e519] [cursor=pointer]:
+                      - generic [ref=e520]:
+                        - text: 更多
+                        - img [ref=e522]
+              - row "Expand this row business-template 模型推理 0 zhadmin 2026/8/10 15:41:52 2026/8/10 15:41:52 详情 更多" [ref=e524]:
+                - cell "Expand this row" [ref=e525]:
+                  - button "Expand this row" [ref=e527] [cursor=pointer]:
+                    - img [ref=e529]
+                - cell "business-template" [ref=e531]:
+                  - generic [ref=e532]: business-template
+                - cell "模型推理" [ref=e533]:
+                  - generic [ref=e534]: 模型推理
+                - cell "0" [ref=e535]:
+                  - generic [ref=e536]: "0"
+                - cell [ref=e537]
+                - cell "zhadmin" [ref=e538]:
+                  - generic [ref=e539]: zhadmin
+                - cell "2026/8/10 15:41:52" [ref=e540]:
+                  - generic [ref=e541]: 2026/8/10 15:41:52
+                - cell "2026/8/10 15:41:52" [ref=e542]:
+                  - generic [ref=e543]: 2026/8/10 15:41:52
+                - cell "详情 更多" [ref=e544]:
+                  - generic [ref=e545]:
+                    - button "详情" [ref=e546] [cursor=pointer]:
+                      - generic [ref=e547]: 详情
+                    - button "更多" [ref=e549] [cursor=pointer]:
+                      - generic [ref=e550]:
+                        - text: 更多
+                        - img [ref=e552]
+        - generic [ref=e555]:
+          - generic [ref=e556]: Total 4
+          - generic [ref=e559] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e561]
+              - generic [ref=e562]: 20/page
+            - img [ref=e565]
+          - button "Go to previous page" [disabled] [ref=e567]:
+            - generic:
+              - img
+          - list [ref=e568]:
+            - listitem "page 1" [ref=e569]: "1"
+          - button "Go to next page" [disabled] [ref=e570]:
+            - generic:
+              - img
+          - generic [ref=e571]:
+            - generic [ref=e572]: Go to
+            - spinbutton "Page" [ref=e575]: "1"

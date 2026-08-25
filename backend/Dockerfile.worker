@@ -1,0 +1,29 @@
+# ============================================================
+# 【已不用于标准部署】标准部署中真实训练/推理由 GPU 宿主机直接执行
+# （executor 以 subprocess 调用宿主机的 swift/vllm），不再使用独立 worker 容器。
+# 本镜像仅保留供开发/CI 或历史参考。
+# ============================================================
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
+
+# 安装 Python
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3-pip git curl && \
+    rm -rf /var/lib/apt/lists/* && \
+    ln -sf /usr/bin/python3.10 /usr/bin/python
+
+WORKDIR /app
+
+# MS-Swift 依赖（与 ModelScope Notebook 镜像 torch 2.10.0 / CUDA 12.8 对齐；
+# ms-swift 固定 2.5.1 与新版 torch 时代错位，此处安装最新版）
+RUN pip install --no-cache-dir \
+    ms-swift \
+    vllm \
+    "torch==2.10.0" torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# 应用依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["celery", "-A", "app.tasks.worker", "worker", "--loglevel=info"]

@@ -1,0 +1,29 @@
+# 环境与密钥（绝不入镜像）
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 数据与日志
+*.db
+*.log
+storage/
+
+# 调试残留
+_tmp_*.py
+_debug_*.py
+_check_*.py
+
+# 测试
+tests/
+
+# 构建产物
+*.egg-info/
+.pytest_cache/
+
+# 版本控制
+.git
+.gitignore
