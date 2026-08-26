@@ -75,7 +75,7 @@
             <el-row :gutter="20">
               <el-col :span="12">
                 <el-form-item label="基础模型" required>
-                  <HierarchicalSelect v-model="form.baseModel" :data="modelTree" placeholder="请选择" />
+                  <HierarchicalSelect v-model="form.baseModel" :data="modelTree" placeholder="请选择基础模型" />
                 </el-form-item>
               </el-col>
               <el-col :span="12">
@@ -255,6 +255,9 @@ async function buildPayload(): Promise<Record<string, unknown>> {
 
 async function handleSave() {
   if (!form.name) { ElMessage.warning('请输入任务名称'); return }
+  if (!form.datasetId) { ElMessage.warning('请选择训练数据集'); return }
+  if (!form.baseModel) { ElMessage.warning('请选择基础模型'); return }
+  if (!form.operator) { ElMessage.warning('请选择算子'); return }
   const payload = await buildPayload()
   try {
     if (isEdit.value) {

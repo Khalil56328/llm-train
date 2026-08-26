@@ -417,16 +417,20 @@ async def _create_output_model(session, task: TrainTask, output_dir: str) -> str
     out_path = Path(output_dir)
     try:
         out_path.mkdir(parents=True, exist_ok=True)
-        # 确保产物目录非空：mock 模式写入标识文件；real 模式若目录为空也补一个标记
-        (out_path / "config.json").write_text(
-            json.dumps({
-                "name": f"{task.name}-output",
-                "task_id": task.id,
-                "mock": exec_mode() == "mock",
-                "created_at": datetime.now().isoformat(),
-            }, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        # 确保产物目录非空：仅当目录中还没有真实 config.json 时才写标识文件，
+        # 避免覆盖真实训练/量化产物的 config.json（否则产物模型因缺 model_type/
+        # architectures 等字段而无法被部署加载）。
+        cfg_path = out_path / "config.json"
+        if not cfg_path.exists() or cfg_path.stat().st_size == 0:
+            cfg_path.write_text(
+                json.dumps({
+                    "name": f"{task.name}-output",
+                    "task_id": task.id,
+                    "mock": exec_mode() == "mock",
+                    "created_at": datetime.now().isoformat(),
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
     except OSError:
         pass
     session.add(Model(
@@ -503,7 +507,8 @@ async def run_training(task_id: str) -> str:
                         level="WARN",
                     )
             # 基座模型路径优先使用模型 storage_path（与数据集对称），否则回退显示名
-            base_model = task.base_model_name or "Qwen/Qwen2.5-7B-Instruct"
+            # 演示版默认模型为 0.5B 级（Qwen/Qwen2.5-0.5B-Instruct，部署脚本自动下载录入）
+            base_model = task.base_model_name or "Qwen/Qwen2.5-0.5B-Instruct"
             if task.base_model_id:
                 mr = await session.execute(select(Model).where(Model.id == task.base_model_id))
                 m = mr.scalar_one_or_none()
@@ -528,13 +533,59 @@ async def run_training(task_id: str) -> str:
                 hyper.setdefault("tuner_type", "lora")
                 hyper.setdefault("lora_target_modules", "all-linear")
             if is_export:
-                # 压缩/导出类任务走独立的 swift export 路径（方案2）
-                quant_method = hyper.get("quant_method") or hyper.get("quantMethod") or "awq"
+                # 压缩任务：演示版仅支持量化（swift export）；剪枝/蒸馏仅入库回显，不参与命令
+                quant_method = str(hyper.get("quant_method") or hyper.get("quantMethod") or "bnb").lower()
+                params = {k: v for k, v in hyper.items() if k not in ("quant_method", "quantMethod")}
+                # 校准数据集：按任务所选校准数据集解析真实路径（GPTQ/AWQ 量化必须）。
+                # 前端 hyperParams.calib_dataset 是级联选择值/ID 字符串，不能直接传给 swift，
+                # 统一剥离后用 calibDatasetId 解析出的真实 storage_path 覆盖。
+                params.pop("calib_dataset", None)
+                calib_path = None
+                if task.calib_dataset_id:
+                    cr = await session.execute(select(Dataset).where(Dataset.id == task.calib_dataset_id))
+                    cds = cr.scalar_one_or_none()
+                    if cds and cds.storage_path:
+                        calib_path = cds.storage_path
+                if calib_path:
+                    params["calib_dataset"] = calib_path
+                # 量化位数校验：仅允许合法整数值，避免 swift export 报 invalid int
+                qb = params.get("quant_bits")
+                if qb is not None:
+                    try:
+                        qb_int = int(qb)
+                    except (TypeError, ValueError):
+                        task.status = "failed"
+                        task.error_message = f"量化位数取值非法: {qb}（仅支持 1/2/3/4/8）"
+                        task.finished_at = datetime.now()
+                        await writer.log(f"训练失败: {task.error_message}", level="ERROR")
+                        await writer.flush()
+                        await session.commit()
+                        return "quant_bits_invalid"
+                    if qb_int not in (1, 2, 3, 4, 8):
+                        task.status = "failed"
+                        task.error_message = f"量化位数取值非法: {qb_int}（仅支持 1/2/3/4/8）"
+                        task.finished_at = datetime.now()
+                        await writer.log(f"训练失败: {task.error_message}", level="ERROR")
+                        await writer.flush()
+                        await session.commit()
+                        return "quant_bits_invalid"
+                    params["quant_bits"] = qb_int
+                if quant_method in ("gptq", "awq") and not calib_path:
+                    task.status = "failed"
+                    task.error_message = (
+                        f"量化方法 {quant_method.upper()} 需要校准数据集，"
+                        "请在压缩任务中选择校准数据集后重试（或改用 bnb 量化，无需校准数据）"
+                    )
+                    task.finished_at = datetime.now()
+                    await writer.log(f"训练失败: {task.error_message}", level="ERROR")
+                    await writer.flush()
+                    await session.commit()
+                    return "quant_calib_missing"
                 cmd = SwiftEngineAdapter.build_export_command(
                     model_path=base_model,
                     quant_method=quant_method,
                     output_dir=output_dir,
-                    params={k: v for k, v in hyper.items() if k not in ("quant_method", "quantMethod")},
+                    params=params,
                 )
             else:
                 cmd = SwiftEngineAdapter.build_train_command(
@@ -562,6 +613,12 @@ async def run_training(task_id: str) -> str:
             await writer.log(f"基座模型: {base_model}", level="INFO")
             await writer.log(f"执行模式: {exec_mode().upper()}", level="INFO")
             await writer.log(f"执行命令: {' '.join(cmd)}", level="INFO")
+            if task.task_type == "alignment":
+                await writer.log(
+                    "提示：偏好对齐（DPO/KTO/ORPO/SimPO）要求数据集为偏好对格式"
+                    "（chosen/rejected，可用演示数据集 preference_demo）；若解析失败请核对数据集格式",
+                    level="INFO",
+                )
 
             # ---- 真实模式前置检查：模型/数据集路径必须真实存在 ----
             # 若记录的 storage_path 指向磁盘上不存在的目录（未下载 / 未配置），
@@ -798,7 +855,7 @@ async def run_inference(deploy_id: str) -> str:
             if not dep:
                 return "deployment_not_found"
 
-            model_path = dep.model_name or "Qwen/Qwen2.5-7B-Instruct"
+            model_path = dep.model_name or "Qwen/Qwen2.5-0.5B-Instruct"
             if dep.model_id:
                 mr = await session.execute(select(Model).where(Model.id == dep.model_id))
                 m = mr.scalar_one_or_none()

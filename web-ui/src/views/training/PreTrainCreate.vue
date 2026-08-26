@@ -46,6 +46,7 @@
             <el-form-item label="训练数据集" required>
               <HierarchicalSelect v-model="form.datasetId" :data="datasetTree" placeholder="请选择数据集" />
             </el-form-item>
+            <div class="form-tip">预训练数据集需为纯文本格式（JSONL 每行 {"text": "..."}，可用演示数据集 pretrain_demo）；对话格式数据会解析失败。</div>
           </div>
         </div>
       </div>
@@ -276,6 +277,9 @@ function buildPayload() {
 
 async function handleSave() {
   if (!form.name) { ElMessage.warning('请输入任务名称'); return }
+  if (!form.datasetId) { ElMessage.warning('请选择训练数据集'); return }
+  if (!form.baseModel) { ElMessage.warning('请选择基础模型'); return }
+  if (!form.operator) { ElMessage.warning('请选择算子'); return }
   try {
     if (isEdit.value) {
       await updateTrainTask(taskId, buildPayload())
@@ -338,5 +342,9 @@ onMounted(async () => {
   margin-top: 32px;
   padding-top: 20px;
   border-top: 1px solid $border-color-lighter;
+}
+.form-tip {
+  font-size: 12px;
+  color: $text-secondary;
 }
 </style>

@@ -33,8 +33,8 @@
 # 方式一：git clone（项目有仓库时）
 git clone <仓库地址> && cd model_train
 
-# 方式二：本机打包 → scp（Windows 本机执行 deploy/notebook/package.ps1 生成 model_train_upload.zip）
-# Windows: powershell -ExecutionPolicy Bypass -File deploy/notebook/package.ps1
+# 方式二：本机打包 → scp（Windows 本机执行 deploy/common/package.ps1 生成 model_train_upload.zip）
+# Windows: powershell -ExecutionPolicy Bypass -File deploy/common/package.ps1
 scp model_train_upload.zip <用户>@<服务器IP>:~/
 unzip model_train_upload.zip && cd model_train
 
@@ -54,10 +54,10 @@ bash deploy/ubuntu/init_env.sh
 3. **启动 MySQL / Redis 并建库**（复用 `deploy/mysql/init.sql`；Ubuntu 走 systemd，root 走 auth_socket 免密）；
 4. **创建 venv 并安装后端依赖**（`backend/.venv`，全部依赖装在 venv 内，不污染系统 Python）；
 5. **安装引擎**：
-   - 有 GPU：`torch==2.10.0`（cu128，与已验证 Notebook 镜像对齐）+ `ms-swift` + `vllm`，并校验 torch 未被依赖解析降级（自动从 cu128 index 恢复）；
+   - 有 GPU：`torch==2.10.0`（cu128，与已验证 Notebook 镜像对齐）+ `ms-swift` + `vllm`；torch 被引擎依赖解析改动时，**cu128 构建直接保留**（新版 vLLM 会按自身依赖锁定 torch 版本），仅非 cu128 构建才从 cu128 index 恢复；
    - 无 GPU：`torch`（CPU 版）+ `ms-swift`，并把生成的 `.env` 中 `TRAIN_EXECUTION_MODE` 设为 `mock`；
 6. **构建前端**（npm install + npm run build → `web-ui/dist`）；
-7. **生成 `backend/.env`**（从 `.env.ubuntu` 复制）+ 创建 `backend/workspace/{models,datasets}`；
+7. **生成 `backend/.env`**（从 `.env.ubuntu` 复制）+ 创建 `backend/workspace/{models,datasets}`；配置了 `SEED_MODEL_ID` 时自动下载默认模型（约 0.5~1GB）并**录入模型库**（我的模型库 / 模型库广场可见）；
 8. **验证后端模块导入**（`test_import.py`）；
 9. 打印后续操作指引。
 
@@ -65,19 +65,31 @@ bash deploy/ubuntu/init_env.sh
 >
 > **驱动版本注意**：CUDA 12.8（cu128）需要驱动 ≥ 570。驱动较旧（如 550~570）时改用 `CUDA_VERSION=cu124 TORCH_VERSION=2.9.0 bash deploy/ubuntu/init_env.sh`。
 
-### 3. 下载真实模型（真实训练/推理必需）
+### 3. 真实模型：自动下载并录入模型库（真实训练/推理必需）
 
-平台内置的种子模型/数据集是**演示占位符**，真实训练前请下载模型与数据集并把 `storage_path` 改为真实路径：
+`init_env.sh` 已自动下载默认模型（`backend/.env` 的 `SEED_MODEL_ID`，默认
+**Qwen/Qwen2.5-0.5B-Instruct**）并**录入模型库**——模拟「我的模型库 → 创建模型 →
+上传模型文件」页面逻辑写入 `models / model_versions / model_files` 三张表，
+`storage_path` 与文件记录均指向真实下载的模型文件，登录后「我的模型库 / 模型库广场」
+即可看到该模型，可直接用于微调/推理演示。
+
+按需下载其他真实模型 / 数据集：
 
 ```bash
-# 下载模型到 backend/workspace/models/，脚本会打印应填入平台的绝对路径
-bash deploy/notebook/download_models.sh --model Qwen/Qwen2.5-7B-Instruct
+# 模型下载完成后自动录入模型库（幂等，我的模型库 / 模型库广场立即可见）
+bash deploy/common/download_models.sh --model Qwen/Qwen2.5-0.5B-Instruct
 # 一次多个：--model A --model B
-# 数据集：--dataset swift/self-cognition
-# 指定落盘目录：--dir models/qwen/qwen2.5-7b-instruct
+# 数据集：--dataset swift/self-cognition（数据集下载后需在平台手动指向 storage_path）
+# 指定落盘目录：--dir models/qwen/qwen2.5-0.5b-instruct
 ```
 
-然后在平台「模型管理 / 数据集管理」编辑该模型/数据集的 `storage_path` 为脚本打印的绝对路径。
+> 模型由 `download_models.sh` 下载后即自动录入模型库，**无需手动编辑 `storage_path`**；
+> 若当时 MySQL 未就绪导致录入失败，脚本会打印可补录的命令，或直接重跑
+> `bash deploy/common/download_models.sh --model <模型ID>`（已存在目录会跳过下载、仅补录记录）。
+
+> **演示数据集**：`init_env.sh` 已自动生成 `backend/workspace/datasets/` 下三个演示数据集
+> （SFT / 偏好 / 预训练文本，由 `deploy/common/seed_demo_data.py` 生成），后端启动时自动录入数据集管理，
+> 训练向导可直接选择（默认 0.5B 模型同样由 init 自动下载并录入模型库）。
 
 ### 4. 启动服务
 
@@ -113,7 +125,7 @@ sudo journalctl -u llm-train-api -f
 bash deploy/ubuntu/install_systemd.sh --remove
 
 # 数据备份（服务器磁盘持久，但建议定期备份 + 异地/对象存储）
-bash deploy/notebook/backup.sh          # mysqldump + workspace/storage 打包到 backend/backups/
+bash deploy/common/backup.sh          # mysqldump + workspace/storage 打包到 backend/backups/
 
 # 升级引擎（如 ms-swift 出新版）
 cd backend && .venv/bin/pip install -U ms-swift vllm
@@ -131,6 +143,10 @@ cd backend && .venv/bin/pip install -U ms-swift vllm
 ## 五、常见问题
 
 - **`error: externally-managed-environment`（PEP 668）**：Ubuntu 24.04 禁止向系统 Python pip 安装。一律使用 `backend/.venv`：`cd backend && .venv/bin/python -m pip install ...`（`init_env.sh` / `start.sh` / systemd 均已自动使用 venv）。
+- **模型库看不到默认模型 / 模型记录**：模型由 `download_models.sh` 下载后自动录入（模拟页面「创建模型 + 上传模型文件」逻辑），若仍缺失请检查：
+  1) `backend/workspace/models/<模型名小写>/` 是否有文件（下载失败或未配置 `SEED_MODEL_ID` 则不会录入）；
+  2) 确认 MySQL 已启动（`sudo systemctl status mysql`）后重跑 `bash deploy/common/download_models.sh --model <模型ID>`——目录已存在时会跳过下载、仅补录模型记录（幂等）；
+  3) 或在平台手动「我的模型库 → 创建模型 → 上传模型文件」并把 `storage_path` 指向脚本打印的真实路径。
 - **MySQL 连不上 / `ERROR 2002`**：`sudo systemctl status mysql`；Ubuntu root 走 auth_socket，初始化用 `sudo mysql < deploy/mysql/init.sql` 即可。
 - **`nvidia-smi` 不存在（无 GPU 或驱动未装）**：`sudo ubuntu-drivers autoinstall` 后重启；或用 `--install-driver` 参数自动安装。未装驱动前平台自动 mock，业务流不受影响。
 - **vLLM 启动报 CUDA 错误 / 驱动版本不足**：cu128 需要驱动 ≥ 570。驱动较旧时重跑 `CUDA_VERSION=cu124 TORCH_VERSION=2.9.0 bash deploy/ubuntu/init_env.sh`。

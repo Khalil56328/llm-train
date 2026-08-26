@@ -86,8 +86,8 @@ const statValues = ref<Record<string, number>>({ tasks: 0, models: 0, deploys: 0
 
 const quickActions = [
   { name: '模型微调', desc: '监督微调训练', icon: 'Cpu', color: '#e63946', path: '/train/fine-tune' },
-  { name: '偏好对齐', desc: 'DPO/KTO/GRPO', icon: 'TrendCharts', color: '#e6a23c', path: '/train/alignment' },
-  { name: '模型压缩', desc: '量化与剪枝', icon: 'CircleCheck', color: '#409eff', path: '/train/compression' },
+  { name: '偏好对齐', desc: 'DPO/KTO/ORPO/SimPO', icon: 'TrendCharts', color: '#e6a23c', path: '/train/alignment' },
+  { name: '模型压缩', desc: '模型量化', icon: 'CircleCheck', color: '#409eff', path: '/train/compression' },
   { name: '预训练', desc: '持续预训练', icon: 'DataAnalysis', color: '#67c23a', path: '/train/pretrain' },
   { name: '场景训练', desc: 'OCR/客服/代码', icon: 'Document', color: '#8b5cf6', path: '/train/scene' },
   { name: '模型部署', desc: '推理服务部署', icon: 'Connection', color: '#06b6d4', path: '/service/deployment' },

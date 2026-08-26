@@ -8,9 +8,9 @@
 #      backend/workspace（模型/数据集/训练产物）+ backend/storage（上传文件/评测报告）
 #
 # 用法：
-#   bash deploy/notebook/backup.sh                    # 备份到 backend/backups/
-#   bash deploy/notebook/backup.sh --no-data          # 仅备份数据库
-#   bash deploy/notebook/backup.sh --out /path/to/dir # 指定备份目录
+#   bash deploy/common/backup.sh                    # 备份到 backend/backups/
+#   bash deploy/common/backup.sh --no-data          # 仅备份数据库
+#   bash deploy/common/backup.sh --out /path/to/dir # 指定备份目录
 #
 # 备份后务必把 backups/ 下载到本地或上传到 ModelScope 数据集仓库中转：
 #   modelscope upload --dataset <你的账号>/<仓库名> backend/backups backups
@@ -26,7 +26,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --no-data) WITH_DATA=0 ;;
     --out)     OUT_DIR="$2"; shift 2 ;;
-    -h|--help) echo "用法: bash deploy/notebook/backup.sh [--no-data] [--out <dir>]"; exit 0 ;;
+    -h|--help) echo "用法: bash deploy/common/backup.sh [--no-data] [--out <dir>]"; exit 0 ;;
     *) echo "[ERROR] 未知参数: $1"; exit 1 ;;
   esac
 done

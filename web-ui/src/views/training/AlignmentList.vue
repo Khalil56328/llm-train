@@ -1,6 +1,6 @@
 <template>
   <div class="alignment-list">
-    <PageHeaderCard title="偏好对齐" desc="偏好对齐旨在让模型的输出更符合你的偏好，平台提供KTO、DPO、奖励模型训练、PPO训练等多种训练模式。" />
+    <PageHeaderCard title="偏好对齐" desc="偏好对齐旨在让模型的输出更符合你的偏好，平台提供 DPO/KTO/ORPO/SimPO 等离线对齐方法（演示版暂不支持 RLHF/PPO）。" />
     <SearchFilter v-model:model-value="searchKeyword" @search="fetchData" @reset="handleReset" @create="goCreate">
       <template #filters>
         <el-select v-model="filterStatus" placeholder="任务状态" clearable style="width: 180px" @change="fetchData">
@@ -10,7 +10,6 @@
           <el-option label="执行失败" value="failed" />
         </el-select>
         <el-select v-model="filterMethod" placeholder="对齐方法" clearable style="width: 180px; margin-left: 12px" @change="fetchData">
-          <el-option label="RLHF" value="alignment" />
           <el-option label="DPO" value="dpo" />
           <el-option label="KTO" value="kto" />
           <el-option label="ORPO" value="orpo" />

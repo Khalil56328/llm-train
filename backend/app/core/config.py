@@ -52,8 +52,11 @@ class Settings(BaseSettings):
     FRONTEND_DIST_DIR: str = ""
 
     # 部署时自动录入的默认模型（ModelScope 模型 ID，如 Qwen/Qwen2.5-0.5B-Instruct）
-    # 由部署脚本（deploy/notebook/download_models.sh）下载到 backend/workspace/models/<模型名小写>/，
-    # 后端首次启动时自动扫描录入模型库（广场可见、可用于训练/部署）；留空则不自动录入
+    # 由部署脚本（deploy/common/download_models.sh）下载到 backend/workspace/models/<模型名小写>/，
+    # 下载完成后立即模拟页面「创建模型 + 上传模型文件」逻辑录入模型库
+    # （deploy/common/seed_model_record.py：写 models / model_versions / model_files，
+    #  storage_path 与文件指向真实下载路径，广场/我的模型库可见）；后端启动时的
+    # ModelSeedService 作为幂等兜底。留空则不自动录入
     SEED_MODEL_ID: str = ""
     SEED_MODEL_VENDOR: str = "ModelScope"
     SEED_MODEL_TYPE: str = "dialogue"      # dialogue / vision / embedding / ...

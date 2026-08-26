@@ -18,6 +18,10 @@
 #   PIP_INDEX_URL     pip 镜像源（默认走系统配置；国内网络可设
 #                     https://pypi.tuna.tsinghua.edu.cn/simple 加速）
 #   NPM_REGISTRY      npm 镜像源（默认 https://registry.npmmirror.com）
+#   TORCH_WHEEL_INDEX torch cu128 wheel 镜像源（默认 https://mirrors.aliyun.com/pytorch-wheels/cu128；
+#                     备用 https://mirrors.tuna.tsinghua.edu.cn/pytorch-wheels/cu128 或
+#                     https://mirrors.cloud.tencent.com/pytorch-wheels/cu128；
+#                     仅在引擎安装把 torch 换成非 cu128 构建时用于恢复）
 # ============================================================
 set -euo pipefail
 
@@ -41,7 +45,7 @@ MIN_DISK_GB=12
 # 提前加载依赖服务辅助函数（仅定义函数，无副作用）：
 # mysql_port_alive / redis_port_alive 用于识别 docker/外部提供的 MySQL、Redis
 # shellcheck disable=SC1091
-source "$PROJECT_ROOT/deploy/notebook/lib_services.sh"
+source "$PROJECT_ROOT/deploy/common/lib_services.sh"
 
 # ---------- Node.js 安装（NodeSource 20；Vite 5 要求 Node >= 18） ----------
 # NodeSource 旧版 setup_20.x 脚本已弃用，优先用新版 gpg keyring + apt 源方式，
@@ -190,26 +194,61 @@ else
     echo "    [WARN] 引擎安装未完全成功；TRAIN_EXECUTION_MODE=auto 会自动降级 mock，可先跑通业务流"
   }
 fi
-# torch 防降级：vLLM / ms-swift 的依赖解析可能重装或降级 torch，破坏镜像 cu128 构建。
-# 检测到版本变化时自动从 cu128 index 恢复；恢复失败直接退出（不再仅告警）。
+# torch 防降级校验：vLLM / ms-swift 的依赖解析可能重装或降级 torch。
+# 注意：新版 vLLM（0.11.x）会按自身依赖把 torch 锁定到特定版本（如 2.8.0），
+#       此时强行恢复镜像自带版本反而会导致 vLLM import 失败。
+# 因此：只要新版本仍是 cu128（CUDA 12.8）构建就与镜像 CUDA 12.8.1 兼容，直接保留；
+#       仅当 torch 被换成非 cu128 构建（如 +cpu）时才从镜像源恢复。
 TORCH_AFTER="$(python3 -c 'import torch;print(torch.__version__)' 2>/dev/null || echo '?')"
 echo "    安装后 torch: ${TORCH_AFTER}"
 if [ "$TORCH_BEFORE" != "?" ] && [ "$TORCH_AFTER" != "?" ] && [ "$TORCH_BEFORE" != "$TORCH_AFTER" ]; then
-  echo "    [ERROR] torch 被引擎依赖解析改动（${TORCH_BEFORE} -> ${TORCH_AFTER}），尝试从 cu128 index 恢复..."
-  if python3 -m pip install "torch==${TORCH_BEFORE}" --index-url https://download.pytorch.org/whl/cu128; then
-    TORCH_RESTORED="$(python3 -c 'import torch;print(torch.__version__)' 2>/dev/null || echo '?')"
-    if [ "$TORCH_RESTORED" = "$TORCH_BEFORE" ]; then
-      echo "    torch 已恢复为 ${TORCH_BEFORE}"
-    else
-      echo "    [ERROR] torch 恢复失败（当前 ${TORCH_RESTORED}）。"
-      echo "            请重置镜像后重跑本脚本，或在安装引擎时显式锁定 torch 版本。"
-      exit 1
-    fi
-  else
-    echo "    [ERROR] torch 恢复失败。请重置镜像后重跑本脚本，或在安装引擎时显式锁定 torch 版本。"
-    exit 1
-  fi
+  case "$TORCH_AFTER" in
+    *+cu128*)
+      echo "    [INFO] 引擎依赖解析将 torch 从 ${TORCH_BEFORE} 调整为 ${TORCH_AFTER}。"
+      echo "           ${TORCH_AFTER} 为 cu128（CUDA 12.8）构建，与镜像 CUDA 12.8.1 兼容，保留该版本"
+      echo "           （vLLM 等引擎按自身依赖锁定 torch 版本，强改会破坏引擎）。"
+      ;;
+    *)
+      echo "    [ERROR] torch 被改为 ${TORCH_AFTER}（非 cu128 构建），尝试从 cu128 源恢复 ${TORCH_BEFORE}..."
+      TORCH_WHEEL_INDEX="${TORCH_WHEEL_INDEX:-https://mirrors.aliyun.com/pytorch-wheels/cu128}"
+      if python3 -m pip install --no-cache-dir "torch==${TORCH_BEFORE}" --index-url "$TORCH_WHEEL_INDEX" \
+          --timeout 120 --retries 10; then
+        TORCH_RESTORED="$(python3 -c 'import torch;print(torch.__version__)' 2>/dev/null || echo '?')"
+        if [ "$TORCH_RESTORED" = "$TORCH_BEFORE" ]; then
+          echo "    torch 已恢复为 ${TORCH_BEFORE}"
+        else
+          echo "    [ERROR] torch 恢复失败（当前 ${TORCH_RESTORED}）。"
+          echo "            请重置镜像后重跑本脚本，或在安装引擎时显式锁定 torch 版本。"
+          exit 1
+        fi
+      else
+        echo "    [ERROR] torch 恢复失败（网络问题？）。可手动执行："
+        echo "            python3 -m pip install \"torch==${TORCH_BEFORE}\" --index-url \"$TORCH_WHEEL_INDEX\" --timeout 120 --retries 10"
+        echo "            或换用其他镜像：https://mirrors.tuna.tsinghua.edu.cn/pytorch-wheels/cu128"
+        echo "            或 https://mirrors.cloud.tencent.com/pytorch-wheels/cu128"
+        exit 1
+      fi
+      ;;
+  esac
 fi
+# 清理引擎依赖解析报告的部分依赖冲突：
+#   - ms-agent 1.6.0 需要 edge-tts / faiss-cpu / moviepy（未随引擎解析装上）
+#   - ms-opencompass 0.1.6 要求 numpy<2.0.0（解析时装成了 2.x）
+# 失败不影响训练/推理主流程，仅告警（用到 ms-agent / ms-opencompass 相关功能时再手动补装）。
+echo "    清理引擎依赖冲突（numpy<2 / edge-tts / faiss-cpu / moviepy）..."
+if [ -n "$PIP_INDEX_URL" ]; then
+  python3 -m pip install --no-cache-dir "numpy>=1.23.4,<2.0.0" edge-tts faiss-cpu moviepy --index-url "$PIP_INDEX_URL" \
+    || echo "    [WARN] 依赖冲突清理未完全成功（不影响训练/推理主流程）"
+else
+  python3 -m pip install --no-cache-dir "numpy>=1.23.4,<2.0.0" edge-tts faiss-cpu moviepy \
+    || echo "    [WARN] 依赖冲突清理未完全成功（不影响训练/推理主流程）"
+fi
+# numpy 降级后快速校验 torch 仍可导入（torch 2.8 支持 numpy 1.26）
+if ! python3 -c "import torch" 2>/dev/null; then
+  echo "    [ERROR] 清理依赖后 torch 无法导入，请检查 numpy/torch 版本兼容性"
+  exit 1
+fi
+
 # 打印引擎版本，便于确认与 ms-swift 4.x / 新版 vLLM 的兼容性
 echo "    ms-swift: $(python3 -c 'import swift;print(getattr(swift, \"__version__\", \"?\"))' 2>/dev/null || echo '?')"
 echo "    vllm:     $(python3 -m vllm --version 2>/dev/null || echo '?')"
@@ -247,21 +286,31 @@ mkdir -p backend/workspace
 mkdir -p backend/workspace/models
 mkdir -p backend/workspace/datasets
 echo "    已创建训练工作目录 backend/workspace（含 models/ datasets/，供模型/数据集落盘）"
-echo "    提示：真实训练前用 deploy/notebook/download_models.sh 下载模型到 workspace/models，"
+echo "    提示：真实训练前用 deploy/common/download_models.sh 下载模型到 workspace/models，"
 echo "          并在平台把模型/数据集的 storage_path 指向真实路径（详见 README 常见问题）"
 
-# ---------- 下载默认模型（SEED_MODEL_ID 非空时自动下载，供后端启动时录入模型库） ----------
+# ---------- 下载默认模型（SEED_MODEL_ID 非空时自动下载并录入模型库） ----------
 SEED_MODEL_ID="$(grep -E '^SEED_MODEL_ID=' backend/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)"
 if [ -n "$SEED_MODEL_ID" ]; then
   echo "==> 下载默认模型: ${SEED_MODEL_ID}（约 0.5~1GB，视网速可能较久；失败不影响初始化）"
-  if bash deploy/notebook/download_models.sh --model "$SEED_MODEL_ID"; then
-    echo "    默认模型已下载，后端首次启动时会自动录入模型库（模型广场可见）"
+  if bash deploy/common/download_models.sh --model "$SEED_MODEL_ID"; then
+    echo "    默认模型已下载并录入模型库（我的模型库 / 模型库广场可见，文件指向真实路径）"
   else
     echo "    [WARN] 默认模型下载失败（网络问题？），可稍后手动执行："
-    echo "           bash deploy/notebook/download_models.sh --model $SEED_MODEL_ID"
+    echo "           bash deploy/common/download_models.sh --model $SEED_MODEL_ID"
+    echo "           （成功后会同时自动录入模型库）"
   fi
 else
   echo "    未配置 SEED_MODEL_ID，跳过默认模型下载（如需自动安装，在 backend/.env 配置后重跑本脚本）"
+fi
+
+# ---------- 生成演示数据集（SFT / 偏好 / 预训练文本，供训练向导开箱可选） ----------
+echo "==> 生成演示数据集（SFT / 偏好 / 预训练文本，供训练向导开箱可选）..."
+if python3 deploy/common/seed_demo_data.py --root backend/workspace --samples 200; then
+  echo "    演示数据集已生成（backend/workspace/datasets/），后端启动时自动录入数据集管理"
+else
+  echo "    [WARN] 演示数据集生成失败（网络或 modelscope 问题），可稍后手动执行："
+  echo "           python3 deploy/common/seed_demo_data.py --root backend/workspace"
 fi
 
 echo "==> [8/8] 验证后端模块导入"
@@ -275,7 +324,8 @@ echo "访问地址：http://127.0.0.1:8000（可在 Notebook 控制台做端口�
 echo "默认账号：admin / admin123（启动后请尽快修改）"
 echo "------------------------------------------------------------"
 echo "后续常用操作："
-echo "  - 下载真实模型:  bash deploy/notebook/download_models.sh --model Qwen/Qwen2.5-7B-Instruct"
-echo "  - 数据备份:      bash deploy/notebook/backup.sh   （mysqldump + 模型/存储打包）"
+echo "  - 下载真实模型:  bash deploy/common/download_models.sh --model Qwen/Qwen2.5-0.5B-Instruct"
+echo "  - 重新生成演示数据集: python3 deploy/common/seed_demo_data.py --root backend/workspace"
+echo "  - 数据备份:      bash deploy/common/backup.sh   （mysqldump + 模型/存储打包）"
 echo "  - 实例重建恢复:  重新 unzip + bash deploy/notebook/init_env.sh"
 echo "============================================================"

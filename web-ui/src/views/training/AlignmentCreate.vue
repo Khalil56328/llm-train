@@ -5,7 +5,7 @@
         <el-icon><ArrowLeft /></el-icon> 返回
       </el-button>
     </div>
-    <PageHeaderCard :title="isEdit ? '编辑对齐训练任务' : '创建对齐训练任务'" desc="通过RLHF/DPO/KTO等对齐方法，使模型输出更符合人类偏好和价值观。" />
+    <PageHeaderCard title="创建对齐训练任务" desc="通过 DPO/KTO/ORPO/SimPO 等离线偏好对齐方法，使模型输出更符合人类偏好（演示版暂不支持 RLHF/PPO）。" />
 
     <StepCards :steps="steps" :current="currentStep" />
 
@@ -24,7 +24,6 @@
               <el-col :span="12">
                 <el-form-item label="对齐方法" required>
                   <el-select v-model="form.alignMethod" style="width: 100%">
-                    <el-option label="RLHF (PPO)" value="rlhf" />
                     <el-option label="DPO" value="dpo" />
                     <el-option label="KTO" value="kto" />
                     <el-option label="ORPO" value="orpo" />
@@ -57,10 +56,7 @@
                 </el-form-item>
               </el-col>
             </el-row>
-            <el-form-item label="SFT模型" label-width="91.45px" v-if="form.alignMethod === 'rlhf'">
-              <HierarchicalSelect v-model="form.sftModelId" :data="modelTree" placeholder="请选择已训练好的SFT模型" clearable />
-            </el-form-item>
-            <div class="form-tip">RLHF方法需要先训练SFT模型，再基于SFT模型进行对齐训练</div>
+            <div class="form-tip">偏好数据集需为偏好对格式（每行含 chosen / rejected 字段，可用演示数据集 preference_demo）；若选择普通对话数据集会解析失败。</div>
           </div>
         </div>
       </div>
@@ -79,7 +75,7 @@
                 </el-form-item>
               </el-col>
               <el-col :span="12">
-                <el-form-item label="训练方法">
+                <el-form-item label="训练方法" required>
                   <el-radio-group v-model="form.method">
                     <el-radio value="lora">LoRA</el-radio>
                     <el-radio value="full">全量更新</el-radio>
@@ -133,18 +129,13 @@
                   <el-input-number v-model="form.gradAccumSteps" :min="1" :max="64" style="width: 100%" />
                 </el-form-item>
               </el-col>
-              <el-col :span="8">
-                <el-form-item label="KL系数" v-if="form.alignMethod === 'rlhf'">
-                  <el-input v-model="form.klCoeff" placeholder="0.1" />
-                </el-form-item>
-              </el-col>
             </el-row>
             <KvEditor v-model="form.kvParams" add-label="自定义参数" />
           </div>
         </div>
       </div>
 
-      <!-- Step 4: 资源配置 -->
+      <!-- Step 4: 资源配置（演示版仅展示，实际执行按宿主机真实资源） -->
       <div v-if="currentStep === 4">
         <div class="form-section">
           <div class="section-title">资源配置</div>
@@ -182,15 +173,15 @@
       <!-- 底部按钮 -->
       <div class="step-actions">
         <el-button v-if="currentStep > 1" @click="currentStep--">上一步</el-button>
-        <el-button v-if="currentStep < 4" type="primary" @click="currentStep++">下一步</el-button>
-        <el-button v-if="currentStep === 4" type="primary" @click="handleSave">{{ isEdit ? '保存修改' : '保存' }}</el-button>
+        <el-button v-if="currentStep < 4" type="primary" @click="goNext">下一步</el-button>
+        <el-button v-if="currentStep === 4" type="primary" @click="handleSave">保存</el-button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
@@ -207,7 +198,6 @@ const router = useRouter()
 const route = useRoute()
 const currentStep = ref(1)
 const taskId = (route.query.id as string) || ''
-const isEdit = computed(() => !!taskId)
 
 const poolOptions = ref<ResourcePool[]>([])
 function poolLabel(p: ResourcePool) {
@@ -223,17 +213,16 @@ async function loadResourcePools() {
 const steps = [
   { step: 1, title: '基本信息', desc: '配置任务名称、对齐方法、描述' },
   { step: 2, title: '数据配置', desc: '选择偏好数据集与验证数据集' },
-  { step: 3, title: '训练参数', desc: '配置训练框架、方法、模型、参数' },
-  { step: 4, title: '资源配置', desc: '选择资源池，配置 GPU/CPU/内存' },
+  { step: 3, title: '训练参数', desc: '配置训练框架、方法、模型、超参' },
+  { step: 4, title: '资源配置', desc: '资源参数仅展示，按宿主机真实资源执行' },
 ]
 
 const form = reactive({
   name: '',
-  alignMethod: 'rlhf',
+  alignMethod: 'dpo',
   description: '',
   datasetId: '',
   valDatasetId: '',
-  sftModelId: '',
   framework: 'ms-swift',
   method: 'lora',
   baseModel: '',
@@ -243,7 +232,6 @@ const form = reactive({
   batchSize: 1,
   maxLength: 1024,
   gradAccumSteps: 1,
-  klCoeff: '0.1',
   kvParams: [] as { key: string; value: string }[],
   poolId: '',
   gpuCount: 1,
@@ -253,6 +241,18 @@ const form = reactive({
 
 function goBack() {
   router.push('/train/alignment')
+}
+
+function goNext() {
+  if (currentStep.value === 1) {
+    if (!form.name) { ElMessage.warning('请输入任务名称'); return }
+  } else if (currentStep.value === 2) {
+    if (!form.datasetId) { ElMessage.warning('请选择偏好数据集'); return }
+  } else if (currentStep.value === 3) {
+    if (!form.baseModel) { ElMessage.warning('请选择基础模型'); return }
+    if (!form.operator) { ElMessage.warning('请选择算子'); return }
+  }
+  currentStep.value++
 }
 
 function buildPayload() {
@@ -271,8 +271,6 @@ function buildPayload() {
     datasetVersion: form.datasetId.split('/')[2] || '',
     valDatasetId: form.valDatasetId.split('/')[1] || form.valDatasetId,
     valDatasetVersion: form.valDatasetId.split('/')[2] || '',
-    sftModelId: form.sftModelId.split('/')[1] || form.sftModelId,
-    sftModelVersion: form.sftModelId.split('/')[2] || '',
     hyperParams: {
       training_method: form.method,
       learning_rate: form.learningRate,
@@ -280,8 +278,7 @@ function buildPayload() {
       batch_size: form.batchSize,
       max_length: form.maxLength,
       gradient_accumulation_steps: form.gradAccumSteps,
-      kl_coef: form.klCoeff,
-      ...Object.fromEntries(form.kvParams.map(p => [p.key, p.value])),
+      ...Object.fromEntries(form.kvParams.filter(p => p.key).map(p => [p.key, p.value])),
     },
     resourceConfig: {
       poolId: form.poolId,
@@ -294,8 +291,11 @@ function buildPayload() {
 
 async function handleSave() {
   if (!form.name) { ElMessage.warning('请输入任务名称'); return }
+  if (!form.datasetId) { ElMessage.warning('请选择偏好数据集'); return }
+  if (!form.baseModel) { ElMessage.warning('请选择基础模型'); return }
+  if (!form.operator) { ElMessage.warning('请选择算子'); return }
   try {
-    if (isEdit.value) {
+    if (taskId) {
       await updateTrainTask(taskId, buildPayload())
       ElMessage.success('对齐训练任务修改已保存')
     } else {
@@ -317,21 +317,21 @@ async function loadTaskDetail() {
     form.description = task.description || ''
     form.datasetId = task.datasetId ? buildCascaderValue(task.datasetId, 'dataset', task.datasetVersion) : ''
     form.valDatasetId = task.valDatasetId ? buildCascaderValue(task.valDatasetId, 'dataset', task.valDatasetVersion) : ''
-    form.sftModelId = task.sftModelId ? buildCascaderValue(task.sftModelId, 'model', task.sftModelVersion) : ''
     form.baseModel = task.baseModelId ? buildCascaderValue(task.baseModelId, 'model', task.baseModelVersion) : ''
     form.operator = task.operatorId ? buildCascaderValue(task.operatorId, 'operator', task.operatorVersion) : ''
     const hp = task.hyperParams || {}
-    form.alignMethod = String(hp.alignMethod ?? task.subType ?? '').toLowerCase() || 'rlhf'
+    // 兼容旧任务：RLHF/PPO 回显为 DPO（演示版不支持 PPO）
+    const sub = String(task.subType || '').toUpperCase()
+    form.alignMethod = ['DPO', 'KTO', 'ORPO', 'SIMPO'].includes(sub) ? sub.toLowerCase() : 'dpo'
     form.method = String(hp.training_method ?? 'lora')
     form.learningRate = String(hp.learning_rate ?? form.learningRate)
     form.epochs = Number(hp.epochs ?? form.epochs)
     form.batchSize = Number(hp.batch_size ?? form.batchSize)
     form.maxLength = Number(hp.max_length ?? form.maxLength)
     form.gradAccumSteps = Number(hp.gradient_accumulation_steps ?? form.gradAccumSteps)
-    form.klCoeff = String(hp.kl_coef ?? form.klCoeff)
-    const stdKeys = ['training_method', 'learning_rate', 'epochs', 'batch_size', 'max_length', 'gradient_accumulation_steps', 'kl_coef']
+    const stdKeys = new Set(['training_method', 'learning_rate', 'epochs', 'batch_size', 'max_length', 'gradient_accumulation_steps'])
     form.kvParams = Object.entries(hp)
-      .filter(([k]) => !stdKeys.includes(k))
+      .filter(([k, v]) => !stdKeys.has(k) && v !== null && v !== undefined)
       .map(([key, value]) => ({ key, value: String(value) }))
     const rc = (task.resourceConfig || {}) as unknown as Record<string, unknown>
     form.poolId = String(rc.poolId ?? form.poolId)
@@ -364,5 +364,6 @@ onMounted(async () => {
 .form-tip {
   font-size: 12px;
   color: $text-secondary;
+  margin-top: 4px;
 }
 </style>

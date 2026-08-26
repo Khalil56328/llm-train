@@ -4,9 +4,13 @@
 （models / model_versions / model_files 三张表），使「模型库广场」和
 「我的模型库」有真实可用的内容。
 
+注：部署脚本（deploy/common/download_models.sh）下载完成后会立即调用
+deploy/common/seed_model_record.py 模拟页面「创建模型 + 上传模型文件」逻辑录入，
+本服务仅作为后端启动时的幂等兜底（按 storage_path 判重，重复录入自动跳过）。
+
 不再内置演示占位模型：旧版种子模型的 storage_path 是磁盘上不存在的
 占位路径（如 models/qwen/qwen2.5-7b-instruct），真实训练前置检查会
-直接失败并误导用户。改为由部署流程（deploy/notebook/download_models.sh）
+直接失败并误导用户。改为由部署流程（deploy/common/download_models.sh）
 真实下载模型，再由本服务扫描目录并录入数据库（幂等，可安全重启）。
 """
 from __future__ import annotations
@@ -73,7 +77,7 @@ class ModelSeedService:
         if abs_dir is None or not abs_dir.is_dir():
             print(
                 f"[INFO] Model seed: 模型目录不存在（{abs_dir}），跳过录入。"
-                f"请先下载：bash deploy/notebook/download_models.sh --model {hub_id}"
+                f"请先下载：bash deploy/common/download_models.sh --model {hub_id}"
             )
             return 0
 

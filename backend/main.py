@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
             from app.services.auth_service import AuthService
             from app.services.dict_service import DictService
             from app.services.model_seed_service import ModelSeedService
+            from app.services.dataset_seed_service import DatasetSeedService
             from app.services.image_service import ImageService
             from app.services.resource_service import ResourcePoolService
 
@@ -48,6 +49,9 @@ async def lifespan(app: FastAPI):
             model_seed = ModelSeedService(seed_db)
             inserted = await model_seed.seed()
 
+            dataset_seed = DatasetSeedService(seed_db)
+            inserted_datasets = await dataset_seed.seed()
+
             image_svc = ImageService(seed_db)
             inserted_images = await image_svc.seed_defaults()
 
@@ -57,6 +61,8 @@ async def lifespan(app: FastAPI):
             await seed_db.commit()
             if inserted:
                 print(f"[INFO] Model seed: inserted {inserted} models")
+            if inserted_datasets:
+                print(f"[INFO] Dataset seed: inserted {inserted_datasets} datasets")
             if inserted_images:
                 print(f"[INFO] Image seed: inserted {inserted_images} images")
             if inserted_pools:

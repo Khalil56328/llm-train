@@ -69,7 +69,7 @@ fi
 # 确保依赖服务在运行（复用与 init_env.sh 相同的启动逻辑，兼容无 systemd 的 Notebook 容器）
 echo "==> 检查 MySQL / Redis"
 # shellcheck disable=SC1091
-source "$PROJECT_ROOT/deploy/notebook/lib_services.sh"
+source "$PROJECT_ROOT/deploy/common/lib_services.sh"
 start_mysql || true
 if ! wait_mysql 30; then
   echo "    [WARN] MySQL 未就绪，请检查：tail -30 /var/log/mysql/error.log"

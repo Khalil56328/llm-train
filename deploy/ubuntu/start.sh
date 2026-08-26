@@ -76,7 +76,7 @@ fi
 # 确保依赖服务在运行（复用 Notebook 的辅助函数，兼容 systemd 服务器）
 echo "==> 检查 MySQL / Redis"
 # shellcheck disable=SC1091
-source "$PROJECT_ROOT/deploy/notebook/lib_services.sh"
+source "$PROJECT_ROOT/deploy/common/lib_services.sh"
 start_mysql || true
 if ! wait_mysql 30; then
   echo "    [WARN] MySQL 未就绪，请检查：sudo systemctl status mysql"

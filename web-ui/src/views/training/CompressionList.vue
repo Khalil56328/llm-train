@@ -9,12 +9,6 @@
           <el-option label="执行成功" value="succeeded" />
           <el-option label="执行失败" value="failed" />
         </el-select>
-        <el-select v-model="filterType" placeholder="压缩类型" clearable style="width: 180px; margin-left: 12px" @change="fetchData">
-          <el-option label="量化" value="compression" />
-          <el-option label="剪枝" value="pruning" />
-          <el-option label="蒸馏" value="distillation" />
-          <el-option label="量化+蒸馏" value="quant_distill" />
-        </el-select>
       </template>
     </SearchFilter>
 
@@ -51,7 +45,6 @@ import { getTrainTaskList, deleteTrainTask, submitTrainTask } from '@/api/traini
 const router = useRouter()
 
 const searchKeyword = ref('')
-const filterType = ref('')
 const filterStatus = ref('')
 const loading = ref(false)
 const tableData = ref<any[]>([])
@@ -90,7 +83,6 @@ async function fetchData() {
 
 function handleReset() {
   searchKeyword.value = ''
-  filterType.value = ''
   filterStatus.value = ''
   fetchData()
 }

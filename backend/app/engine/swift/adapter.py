@@ -42,16 +42,18 @@ class SwiftEngineAdapter:
         "notifyOnFailure", "notifyOnSuccess",
     })
 
-    # 压缩/导出任务中仅用于入库回显的展示字段（swift export 不识别，透传会导致 argparse 报错）
+    # 压缩/导出任务中仅用于入库回显的展示字段（swift export 不识别，透传会导致 argparse 报错）。
+    # 注意：quant_bits / group_size / calib_dataset / calib_samples 是 swift export 的合法参数，
+    # 正常透传（calib_dataset 由 executor 按任务所选校准数据集解析为真实路径后传入）。
     EXPORT_INTERNAL_KEYS = frozenset(PLATFORM_INTERNAL_KEYS) | {
         "quant_method", "quantMethod",   # executor 已单独提取为 --quant_method
-        "calib_dataset", "calib_samples",
-        "pruning_method", "pruning_ratio",
-        "distill_temp", "distill_alpha",
-        "teacher_model", "epochs",
+        "pruning_method", "pruning_ratio",  # 演示版不支持剪枝，仅入库回显
+        "distill_temp", "distill_alpha",    # 演示版不支持蒸馏，仅入库回显
+        "teacher_model", "epochs",          # 演示版不支持蒸馏，仅入库回显
     }
 
-    # 参数名映射（前端 → Swift 参数名）
+    # 参数名映射（前端 → Swift 参数名；最终以运行时 `swift <子命令> --help` 探测结果为准，
+    # _resolve_flag 会按需把下划线转连字符、或映射到 2.x/3.x/4.x 的改名参数）
     PARAM_MAP = {
         "learning_rate": "--learning_rate",
         "epochs": "--num_train_epochs",
@@ -66,6 +68,14 @@ class SwiftEngineAdapter:
         "save_steps": "--save_steps",
         "eval_steps": "--eval_steps",
         "gradient_accumulation_steps": "--gradient_accumulation_steps",
+        "tuner_type": "--tuner_type",               # 2.x 参数名；4.x 为 --train_type，_resolve_flag 自动适配
+        "train_type": "--train_type",               # 3.x/4.x 参数名（lora / qlora / full）
+        "lora_target_modules": "--lora_target_modules",  # 4.x 可能为 --target_modules，自动适配
+        "target_modules": "--target_modules",
+        "quant_bits": "--quant_bits",
+        "group_size": "--group_size",
+        "calib_dataset": "--calib_dataset",
+        "calib_samples": "--calib_samples",
     }
 
     # 各子命令的 CLI 选项缓存（按子命令分别探测；pt/sft 等参数名可能不一致）
@@ -84,12 +94,14 @@ class SwiftEngineAdapter:
     )
 
     # 新版 ms-swift 若移除旧子命令时的替代候选（探测到缺失时依次尝试）。
-    # 注意：ms-swift 3.x/4.x 大版本重构频繁，请按 Notebook 实际安装的
-    # ms-swift 版本（swift --version）核对后再启用，避免生成错误命令。
+    # ms-swift 3.x/4.x 大版本重构频繁：预训练/偏好对齐/部署子命令可能被合并
+    # 或改名（如并入 swift train / swift sft / swift infer）。执行时会先探测
+    # `swift --help` 实际存在的子命令，缺失时按以下候选兜底，再按探测结果执行。
     SUBCOMMAND_ALIASES: Dict[str, Tuple[str, ...]] = {
-        # "pt": ("train",),      # 例：若 4.x 将预训练合并为 swift train
-        # "rlhf": ("train",),    # 例：若 4.x 将对齐合并为 swift train
-        # "deploy": ("infer",),  # 例：若 4.x 将部署改名为 swift infer
+        "pt": ("train", "sft"),         # 4.x 若将预训练并入 swift train / sft
+        "rlhf": ("sft", "train"),       # 4.x 若将偏好对齐并入 swift sft / train
+        "deploy": ("infer", "deploy"),  # 4.x 若将部署改名为 swift infer
+        # "export": ("train",),         # 导出/量化暂无可靠候选；缺失时保留默认并 WARN（报错信息可定位）
     }
 
     @staticmethod
@@ -247,11 +259,20 @@ class SwiftEngineAdapter:
         hyphen = flag.replace("_", "-")
         if hyphen in opts:
             return hyphen
-        # 基础参数跨版本改名映射
+        # 基础参数跨版本改名映射（2.x/3.x/4.x 参数名差异，按探测到的选项集适配）
         renamed = {
-            "--model": ("--model_id_or_path", "--model-id-or-path"),
-            "--dataset": ("--dataset_id_or_path", "--dataset-id-or-path"),
+            "--model": ("--model_id_or_path", "--model-id-or-path", "--model_path"),
+            "--dataset": ("--dataset_id_or_path", "--dataset-id-or-path", "--train_dataset", "--train-dataset"),
             "--output_dir": ("--output-dir", "--output_dir"),
+            "--tuner_type": ("--train_type", "--train-type", "--tuner-type"),
+            "--train_type": ("--tuner_type", "--tuner-type", "--train-type"),
+            "--lora_target_modules": ("--target_modules", "--target-modules", "--lora-target-modules"),
+            "--target_modules": ("--lora_target_modules", "--lora-target-modules", "--target-modules"),
+            "--rlhf_type": ("--rlhf-type",),
+            "--quant_method": ("--quant-method",),
+            "--quant_bits": ("--quant-bits",),
+            "--calib_dataset": ("--calib-dataset", "--calib_dataset"),
+            "--calib_samples": ("--calib-samples",),
         }
         for cand in renamed.get(flag, ()):
             if cand in opts:
@@ -355,7 +376,8 @@ class SwiftEngineAdapter:
         - command_template 为空：平台默认拼接（任务类型 → swift 子命令 + 基础参数 + 超参映射）
         - command_template 非空：算子版本 start_cmd 命令模板，渲染占位符
           {subcommand} {task_type} {sub_type} {model} {dataset} {output_dir}
-          渲染后仍追加任务超参与环境变量（模板中已出现的参数自动跳过，避免重复传参）。
+          渲染后仍追加任务超参（模板中已出现的参数自动跳过，避免重复传参）。
+        环境变量由 executor 通过子进程环境变量注入，不追加到命令行。
         """
         subcommand = cls._resolve_subcommand(cls.TASK_CMD_MAP.get(task_type, "swift sft"))
         # 实际执行的子命令名（pt / sft / rlhf / export / train / infer），参数探测按它进行
@@ -380,11 +402,11 @@ class SwiftEngineAdapter:
             if dataset:
                 parts.extend([cls._resolve_flag("--dataset", cmd_name), dataset])
             parts.extend([cls._resolve_flag("--output_dir", cmd_name), output_dir])
-            # 偏好对齐类型
+            # 偏好对齐类型（DPO/KTO/ORPO/SimPO 等离线方法；--rlhf_type 参数名按版本探测适配）
             if task_type == "alignment" and sub_type:
                 swift_type = cls.RLHF_TYPE_MAP.get(sub_type)
                 if swift_type:
-                    parts.extend(["--rlhf_type", swift_type])
+                    parts.extend([cls._resolve_flag("--rlhf_type", cmd_name), swift_type])
             rendered_text = " ".join(parts)
 
         # 超参数映射（平台内部字段跳过，仅入库回显；模板中已出现的参数跳过，避免重复传参）
@@ -398,10 +420,9 @@ class SwiftEngineAdapter:
                 continue
             parts.extend([flag, str(value)])
 
-        # 环境变量
-        for key, value in env_vars.items():
-            parts.extend(["--env", f"{key}={value}"])
-
+        # 环境变量不再以 --env 追加到命令行（ms-swift 各版本对该参数支持不一致，且
+        # 4.x 可能直接报 unrecognized arguments）；由 executor 通过 build_process_env()
+        # 写入子进程环境变量，效果等价且无参数风险。
         return parts
 
     @classmethod
@@ -457,23 +478,32 @@ class SwiftEngineAdapter:
     def build_export_command(
         cls,
         model_path: str,
-        quant_method: str = "awq",
+        quant_method: str = "bnb",
         output_dir: Optional[str] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
-        """生成模型压缩/导出命令"""
+        """生成模型量化/导出命令（演示版仅支持量化：awq/gptq/bnb/gguf）
+
+        params 中可含 quant_bits / group_size / calib_dataset / calib_samples
+        等 swift export 合法参数（flag 名按版本探测适配）；剪枝/蒸馏等展示字段
+        在 EXPORT_INTERNAL_KEYS 中被过滤，不会透传给 swift。
+        """
         cmd = cls._resolve_subcommand("swift export").split()
-        cmd.extend([cls._resolve_flag("--model", cmd[-1]), model_path])
+        cmd_name = cmd[-1]
+        cmd.extend([cls._resolve_flag("--model", cmd_name), model_path])
         if quant_method:
-            cmd.extend(["--quant_method", quant_method])
+            cmd.extend([cls._resolve_flag("--quant_method", cmd_name), quant_method])
         if output_dir:
-            cmd.extend(["--output_dir", output_dir])
+            cmd.extend([cls._resolve_flag("--output_dir", cmd_name), output_dir])
         if params:
             for key, value in params.items():
-                # 页面展示字段（剪枝/蒸馏/校准等）仅入库回显，swift export 不识别，透传会报错
+                # 页面展示字段（剪枝/蒸馏/教师模型等）仅入库回显，swift export 不识别，透传会报错
                 if key in cls.EXPORT_INTERNAL_KEYS:
                     continue
-                cmd.extend([f"--{key}", str(value)])
+                flag = cls._resolve_flag(f"--{key}", cmd_name)
+                if flag in cmd:
+                    continue  # 已出现（显式参数）则跳过，避免重复传参
+                cmd.extend([flag, str(value)])
         return cmd
 
     @classmethod

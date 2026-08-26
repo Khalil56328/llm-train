@@ -51,7 +51,7 @@ done
 # 提前加载依赖服务辅助函数（仅定义函数，无副作用）：
 # mysql_port_alive / redis_port_alive 用于识别 docker/外部提供的 MySQL、Redis
 # shellcheck disable=SC1091
-source "$PROJECT_ROOT/deploy/notebook/lib_services.sh"
+source "$PROJECT_ROOT/deploy/common/lib_services.sh"
 
 # 可选环境变量默认值
 PIP_INDEX_URL="${PIP_INDEX_URL:-}"
@@ -211,23 +211,36 @@ if [ "$HAS_GPU" -eq 1 ]; then
       echo "    [WARN] 引擎安装未完全成功；TRAIN_EXECUTION_MODE=auto 会自动降级 mock"
     }
   fi
-  # torch 防降级：vLLM / ms-swift 的依赖解析可能重装或降级 torch，破坏 cu${CUDA_VERSION} 构建
+  # torch 防降级：vLLM / ms-swift 的依赖解析可能重装或降级 torch。
+  # 注意：新版 vLLM（0.11.x）会按自身依赖把 torch 锁定到特定版本（如 2.8.0），
+  #       此时强行恢复目标版本反而会导致 vLLM import 失败。
+  # 因此：只要新版本仍是 ${CUDA_VERSION} 构建就与当前 CUDA 兼容，直接保留；
+  #       仅当 torch 被换成非 ${CUDA_VERSION} 构建（如 +cpu）时才从 ${CUDA_VERSION} 源恢复。
   TORCH_AFTER="$("$PY" -c 'import torch;print(torch.__version__)' 2>/dev/null || echo '?')"
   echo "    安装后 torch: ${TORCH_AFTER}"
   if [ "$TORCH_BEFORE" != "?" ] && [ "$TORCH_AFTER" != "?" ] && [ "$TORCH_BEFORE" != "$TORCH_AFTER" ]; then
-    echo "    [ERROR] torch 被引擎依赖解析改动（${TORCH_BEFORE} -> ${TORCH_AFTER}），尝试恢复..."
-    if "$PIP" install --no-cache-dir "torch==${TORCH_BEFORE}" --index-url "https://download.pytorch.org/whl/${CUDA_VERSION}"; then
-      TORCH_RESTORED="$("$PY" -c 'import torch;print(torch.__version__)' 2>/dev/null || echo '?')"
-      if [ "$TORCH_RESTORED" = "$TORCH_BEFORE" ]; then
-        echo "    torch 已恢复为 ${TORCH_BEFORE}"
-      else
-        echo "    [ERROR] torch 恢复失败（当前 ${TORCH_RESTORED}）。请重跑本脚本。"
-        exit 1
-      fi
-    else
-      echo "    [ERROR] torch 恢复失败。请重跑本脚本。"
-      exit 1
-    fi
+    case "$TORCH_AFTER" in
+      *+${CUDA_VERSION}*)
+        echo "    [INFO] 引擎依赖解析将 torch 从 ${TORCH_BEFORE} 调整为 ${TORCH_AFTER}。"
+        echo "           ${TORCH_AFTER} 为 ${CUDA_VERSION}（CUDA ${CUDA_VERSION}）构建，兼容当前驱动，保留该版本"
+        echo "           （vLLM 等引擎按自身依赖锁定 torch 版本，强改会破坏引擎）。"
+        ;;
+      *)
+        echo "    [ERROR] torch 被改为 ${TORCH_AFTER}（非 ${CUDA_VERSION} 构建），尝试从 ${CUDA_VERSION} 源恢复 ${TORCH_BEFORE}..."
+        if "$PIP" install --no-cache-dir "torch==${TORCH_BEFORE}" --index-url "https://download.pytorch.org/whl/${CUDA_VERSION}"; then
+          TORCH_RESTORED="$("$PY" -c 'import torch;print(torch.__version__)' 2>/dev/null || echo '?')"
+          if [ "$TORCH_RESTORED" = "$TORCH_BEFORE" ]; then
+            echo "    torch 已恢复为 ${TORCH_BEFORE}"
+          else
+            echo "    [ERROR] torch 恢复失败（当前 ${TORCH_RESTORED}）。请重跑本脚本。"
+            exit 1
+          fi
+        else
+          echo "    [ERROR] torch 恢复失败。请重跑本脚本。"
+          exit 1
+        fi
+        ;;
+    esac
   fi
   echo "    ms-swift: $("$PY" -c 'import swift;print(getattr(swift, \"__version__\", \"?\"))' 2>/dev/null || echo '?')"
   echo "    vllm:     $("$PY" -m vllm --version 2>/dev/null || echo '?')"
@@ -273,18 +286,28 @@ fi
 mkdir -p backend/workspace/models backend/workspace/datasets
 echo "    已创建训练工作目录 backend/workspace（含 models/ datasets/）"
 
-# ---------- 下载默认模型（SEED_MODEL_ID 非空时自动下载，供后端启动时录入模型库） ----------
+# ---------- 下载默认模型（SEED_MODEL_ID 非空时自动下载并录入模型库） ----------
 SEED_MODEL_ID="$(grep -E '^SEED_MODEL_ID=' backend/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)"
 if [ -n "$SEED_MODEL_ID" ]; then
   echo "==> 下载默认模型: ${SEED_MODEL_ID}（约 0.5~1GB，视网速可能较久；失败不影响初始化）"
-  if bash deploy/notebook/download_models.sh --model "$SEED_MODEL_ID"; then
-    echo "    默认模型已下载，后端首次启动时会自动录入模型库（模型广场可见）"
+  if bash deploy/common/download_models.sh --model "$SEED_MODEL_ID"; then
+    echo "    默认模型已下载并录入模型库（我的模型库 / 模型库广场可见，文件指向真实路径）"
   else
     echo "    [WARN] 默认模型下载失败（网络问题？），可稍后手动执行："
-    echo "           bash deploy/notebook/download_models.sh --model $SEED_MODEL_ID"
+    echo "           bash deploy/common/download_models.sh --model $SEED_MODEL_ID"
+    echo "           （成功后会同时自动录入模型库）"
   fi
 else
   echo "    未配置 SEED_MODEL_ID，跳过默认模型下载（如需自动安装，在 backend/.env 配置后重跑本脚本）"
+fi
+
+# ---------- 生成演示数据集（SFT / 偏好 / 预训练文本，供训练向导开箱可选） ----------
+echo "==> 生成演示数据集（SFT / 偏好 / 预训练文本，供训练向导开箱可选）..."
+if "$PY" deploy/common/seed_demo_data.py --root backend/workspace --samples 200; then
+  echo "    演示数据集已生成（backend/workspace/datasets/），后端启动时自动录入数据集管理"
+else
+  echo "    [WARN] 演示数据集生成失败（网络或 modelscope 问题），可稍后手动执行："
+  echo "           $PY deploy/common/seed_demo_data.py --root backend/workspace"
 fi
 
 # ============================================================
@@ -306,7 +329,8 @@ fi
 echo "------------------------------------------------------------"
 echo "立即启动（前台）：cd $PROJECT_ROOT && bash deploy/ubuntu/start.sh"
 echo "后台常驻 + 开机自启（推荐服务器）：bash deploy/ubuntu/install_systemd.sh [--with-nginx]"
-echo "下载真实模型：bash deploy/notebook/download_models.sh --model Qwen/Qwen2.5-7B-Instruct"
+echo "下载真实模型：bash deploy/common/download_models.sh --model Qwen/Qwen2.5-0.5B-Instruct"
+echo "重新生成演示数据集：backend/.venv/bin/python deploy/common/seed_demo_data.py --root backend/workspace"
 echo "访问地址：http://<服务器IP>:8000（或 Nginx 80 端口）"
 echo "默认账号：admin / admin123（启动后请尽快修改）"
 echo "============================================================"

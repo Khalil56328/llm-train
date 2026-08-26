@@ -2,6 +2,9 @@
 fastapi>=0.111.1
 uvicorn>=0.30.1
 
+# ========== 模型下载（deploy/common/download_models.sh 依赖；ms-swift 也依赖它，这里显式声明） ==========
+modelscope>=1.14.0
+
 # ========== 数据库 ==========
 sqlalchemy[asyncio]>=2.0.31
 asyncmy>=0.2.9

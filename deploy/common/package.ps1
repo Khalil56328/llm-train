@@ -1,9 +1,9 @@
-﻿# ============================================================
-# LLM 训推平台 · 本地打包脚本（Windows PowerShell）
+# ============================================================
+# LLM 训推平台 · 本地打包脚本（Windows PowerShell，Notebook 与 Ubuntu 部署通用）
 #
 # 用法：
-#   powershell -ExecutionPolicy Bypass -File deploy/notebook/package.ps1
-#   或（PowerShell 7+）：pwsh -File deploy/notebook/package.ps1
+#   powershell -ExecutionPolicy Bypass -File deploy/common/package.ps1
+#   或（PowerShell 7+）：pwsh -File deploy/common/package.ps1
 #
 # 输出：项目根目录下 model_train_upload.zip（内含 model_train/ 目录，仅几 MB）
 #
@@ -13,11 +13,12 @@
 #   文件：.env / *.log / *.db / *.pyc
 #
 # 说明：
-#   - backend/.env 不打包：Notebook 上由 init_env.sh 从 .env.notebook 自动重新生成
-#   - web-ui/dist 不打包：Notebook 上由 init_env.sh 重新 npm run build
-#   - 打包后上传到 Notebook，终端执行：
+#   - backend/.env 不打包：服务器上由对应 init_env.sh 从 .env.ubuntu / .env.notebook 自动重新生成
+#   - web-ui/dist 不打包：服务器上由对应 init_env.sh 重新 npm run build
+#   - 打包后上传到服务器，终端执行：
 #       unzip model_train_upload.zip && cd model_train
-#       bash deploy/notebook/init_env.sh
+#       bash deploy/ubuntu/init_env.sh      # Ubuntu 24.04 服务器
+#       bash deploy/notebook/init_env.sh    # ModelScope Notebook
 # ============================================================
 $ErrorActionPreference = 'Stop'
 
@@ -69,6 +70,7 @@ $fs.Dispose()
 $sizeMB = [math]::Round((Get-Item $zip).Length / 1MB, 2)
 Write-Host ""
 Write-Host "==> 打包完成: $zip ($sizeMB MB)"
-Write-Host "    1) 在 Notebook 文件管理界面拖拽上传该 zip"
+Write-Host "    1) 在服务器文件管理界面拖拽上传该 zip"
 Write-Host "    2) 终端执行: unzip model_train_upload.zip && cd model_train"
-Write-Host "    3) bash deploy/notebook/init_env.sh"
+Write-Host "    3) bash deploy/ubuntu/init_env.sh  （Ubuntu 服务器）"
+Write-Host "       或 bash deploy/notebook/init_env.sh （ModelScope Notebook）"

@@ -5,7 +5,7 @@
         <el-icon><ArrowLeft /></el-icon> 返回
       </el-button>
     </div>
-    <PageHeaderCard :title="isEdit ? '编辑压缩训练任务' : '创建压缩训练任务'" desc="通过量化、剪枝、蒸馏等压缩技术，降低模型体积和推理延迟，提升部署效率。" />
+    <PageHeaderCard title="创建压缩训练任务" desc="通过量化压缩模型体积、降低推理延迟，提升部署效率（演示版仅支持量化，剪枝/蒸馏暂不提供）。" />
 
     <StepCards :steps="steps" :current="currentStep" />
 
@@ -25,8 +25,6 @@
                 <el-form-item label="压缩类型" required>
                   <el-select v-model="form.compressionType" style="width: 100%">
                     <el-option label="量化 (Quantization)" value="quantization" />
-                    <el-option label="剪枝 (Pruning)" value="pruning" />
-                    <el-option label="蒸馏 (Distillation)" value="distillation" />
                     <el-option label="量化+蒸馏" value="quant_distill" />
                   </el-select>
                 </el-form-item>
@@ -39,7 +37,7 @@
         </div>
       </div>
 
-      <!-- Step 2: 压缩配置 -->
+      <!-- Step 2: 模型与压缩配置 -->
       <div v-if="currentStep === 2">
         <div class="form-section">
           <div class="section-title">模型配置</div>
@@ -56,100 +54,56 @@
                 </el-form-item>
               </el-col>
             </el-row>
-            <el-form-item label="教师模型" v-if="form.compressionType === 'distillation' || form.compressionType === 'quant_distill'">
-              <HierarchicalSelect v-model="form.teacherModel" :data="modelTree" placeholder="请选择教师模型" clearable />
-              <div class="form-tip">知识蒸馏需要选择一个更大的教师模型来指导学生模型训练</div>
-            </el-form-item>
           </div>
         </div>
 
         <div class="form-section">
-          <div class="section-title">压缩参数</div>
+          <div class="section-title">量化参数</div>
           <div class="section-body">
-            <template v-if="form.compressionType === 'quantization' || form.compressionType === 'quant_distill'">
-              <el-row :gutter="20">
-                <el-col :span="8">
-                  <el-form-item label="量化位数" required>
-                    <el-select v-model="form.quantBits" style="width: 100%">
-                      <el-option label="4-bit (INT4)" value="4" />
-                      <el-option label="8-bit (INT8)" value="8" />
-                      <el-option label="GPTQ-4bit" value="gptq4" />
-                      <el-option label="AWQ-4bit" value="awq4" />
-                      <el-option label="GGUF-Q4_K_M" value="gguf-q4km" />
-                    </el-select>
-                  </el-form-item>
-                </el-col>
-                <el-col :span="8">
-                  <el-form-item label="量化方法">
-                    <el-select v-model="form.quantMethod" style="width: 100%">
-                      <el-option label="GPTQ" value="gptq" />
-                      <el-option label="AWQ" value="awq" />
-                      <el-option label="BitsAndBytes" value="bnb" />
-                      <el-option label="GGUF" value="gguf" />
-                    </el-select>
-                  </el-form-item>
-                </el-col>
-                <el-col :span="8">
-                  <el-form-item label="校准数据集">
-                    <HierarchicalSelect v-model="form.calibDataset" :data="datasetTree" placeholder="请选择校准数据集" clearable />
-                  </el-form-item>
-                </el-col>
-              </el-row>
-              <el-row :gutter="20">
-                <el-col :span="8">
-                  <el-form-item label="校准样本数">
-                    <el-input-number v-model="form.calibSamples" :min="32" :max="4096" :step="32" style="width: 100%" />
-                  </el-form-item>
-                </el-col>
-                <el-col :span="8">
-                  <el-form-item label="分组大小">
-                    <el-input-number v-model="form.groupSize" :min="32" :max="512" :step="32" style="width: 100%" />
-                  </el-form-item>
-                </el-col>
-              </el-row>
-            </template>
-            <template v-if="form.compressionType === 'pruning'">
-              <el-row :gutter="20">
-                <el-col :span="8">
-                  <el-form-item label="剪枝方法">
-                    <el-select v-model="form.pruningMethod" style="width: 100%">
-                      <el-option label="结构化剪枝" value="structured" />
-                      <el-option label="非结构化剪枝" value="unstructured" />
-                    </el-select>
-                  </el-form-item>
-                </el-col>
-                <el-col :span="8">
-                  <el-form-item label="剪枝比例">
-                    <el-slider v-model="form.pruningRatio" :min="0" :max="90" :step="5" show-input />
-                  </el-form-item>
-                </el-col>
-              </el-row>
-            </template>
-            <template v-if="form.compressionType === 'distillation' || form.compressionType === 'quant_distill'">
-              <el-row :gutter="20">
-                <el-col :span="8">
-                  <el-form-item label="蒸馏温度">
-                    <el-input v-model="form.distillTemp" placeholder="2.0" />
-                  </el-form-item>
-                </el-col>
-                <el-col :span="8">
-                  <el-form-item label="蒸馏损失权重">
-                    <el-input v-model="form.distillAlpha" placeholder="0.5" />
-                  </el-form-item>
-                </el-col>
-                <el-col :span="8">
-                  <el-form-item label="训练轮数">
-                    <el-input-number v-model="form.epochs" :min="1" :max="100" style="width: 100%" />
-                  </el-form-item>
-                </el-col>
-              </el-row>
-            </template>
+            <el-row :gutter="20">
+              <el-col :span="8">
+                <el-form-item label="量化位数" required>
+                  <el-select v-model="form.quantBits" style="width: 100%">
+                    <el-option label="4-bit (INT4)" value="4" />
+                    <el-option label="8-bit (INT8)" value="8" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="量化方法" required>
+                  <el-select v-model="form.quantMethod" style="width: 100%">
+                    <el-option label="BitsAndBytes（无需校准数据）" value="bnb" />
+                    <el-option label="GPTQ（需校准数据集）" value="gptq" />
+                    <el-option label="AWQ（需校准数据集）" value="awq" />
+                    <el-option label="GGUF" value="gguf" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="校准数据集" :required="needCalib">
+                  <HierarchicalSelect v-model="form.calibDataset" :data="datasetTree" placeholder="请选择校准数据集" clearable />
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <el-row :gutter="20">
+              <el-col :span="8">
+                <el-form-item label="校准样本数">
+                  <el-input-number v-model="form.calibSamples" :min="32" :max="4096" :step="32" style="width: 100%" />
+                </el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="分组大小">
+                  <el-input-number v-model="form.groupSize" :min="32" :max="512" :step="32" style="width: 100%" />
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <div v-if="needCalib" class="form-tip">GPTQ / AWQ 量化需要校准数据集（可选用演示数据集 sft_self_cognition）。</div>
             <KvEditor v-model="form.kvParams" add-label="自定义参数" />
           </div>
         </div>
       </div>
 
-      <!-- Step 3: 资源配置 -->
+      <!-- Step 3: 资源配置（演示版仅展示，实际执行按宿主机真实资源） -->
       <div v-if="currentStep === 3">
         <div class="form-section">
           <div class="section-title">资源配置</div>
@@ -187,8 +141,8 @@
       <!-- 底部按钮 -->
       <div class="step-actions">
         <el-button v-if="currentStep > 1" @click="currentStep--">上一步</el-button>
-        <el-button v-if="currentStep < 3" type="primary" @click="currentStep++">下一步</el-button>
-        <el-button v-if="currentStep === 3" type="primary" @click="handleSave">{{ isEdit ? '保存修改' : '保存' }}</el-button>
+        <el-button v-if="currentStep < 3" type="primary" @click="goNext">下一步</el-button>
+        <el-button v-if="currentStep === 3" type="primary" @click="handleSave">保存</el-button>
       </div>
     </div>
   </div>
@@ -212,7 +166,6 @@ const router = useRouter()
 const route = useRoute()
 const currentStep = ref(1)
 const taskId = (route.query.id as string) || ''
-const isEdit = computed(() => !!taskId)
 
 const poolOptions = ref<ResourcePool[]>([])
 function poolLabel(p: ResourcePool) {
@@ -227,8 +180,8 @@ async function loadResourcePools() {
 
 const steps = [
   { step: 1, title: '基本信息', desc: '配置任务名称、压缩类型、描述' },
-  { step: 2, title: '压缩配置', desc: '选择模型、算子、压缩参数' },
-  { step: 3, title: '资源配置', desc: '选择资源池，配置 GPU/CPU/内存' },
+  { step: 2, title: '压缩配置', desc: '选择模型、算子、量化参数' },
+  { step: 3, title: '资源配置', desc: '资源参数仅展示，按宿主机真实资源执行' },
 ]
 
 const form = reactive({
@@ -237,45 +190,49 @@ const form = reactive({
   description: '',
   baseModel: '',
   operator: '',
-  teacherModel: '',
-  // 量化参数
   quantBits: '4',
-  quantMethod: 'gptq',
-  calibDataset: 'general-zh',
+  quantMethod: 'bnb',
+  calibDataset: '',
   calibSamples: 128,
   groupSize: 128,
-  // 剪枝参数
-  pruningMethod: 'structured',
-  pruningRatio: 50,
-  // 蒸馏参数
-  distillTemp: '2.0',
-  distillAlpha: '0.5',
-  epochs: 1,
   kvParams: [] as { key: string; value: string }[],
-  // 资源配置
   poolId: '',
   gpuCount: 1,
   cpu: 4,
   memory: 32,
 })
 
+const needCalib = computed(() => form.quantMethod === 'gptq' || form.quantMethod === 'awq')
+
 function goBack() {
   router.push('/train/compression')
+}
+
+function goNext() {
+  if (currentStep.value === 1) {
+    if (!form.name) { ElMessage.warning('请输入任务名称'); return }
+  } else if (currentStep.value === 2) {
+    if (!form.baseModel) { ElMessage.warning('请选择基础模型'); return }
+    if (!form.operator) { ElMessage.warning('请选择算子'); return }
+    if (needCalib.value && !form.calibDataset) {
+      ElMessage.warning('量化方法 GPTQ/AWQ 需要选择校准数据集')
+      return
+    }
+  }
+  currentStep.value++
 }
 
 function buildPayload() {
   return {
     name: form.name,
     taskType: 'compression',
-    subType: form.compressionType === 'quantization' ? '量化' : form.compressionType === 'pruning' ? '剪枝' : form.compressionType === 'distillation' ? '蒸馏' : '量化+蒸馏',
+    subType: form.compressionType === 'quant_distill' ? '量化+蒸馏' : '量化',
     description: form.description,
     baseModelId: form.baseModel.split('/')[1] || form.baseModel,
     baseModelVersion: form.baseModel.split('/')[2] || '',
     baseModelName: findModelName(form.baseModel.split('/')[1] || form.baseModel),
     operatorId: form.operator.split('/')[1] || form.operator,
     operatorVersion: form.operator.split('/')[2] || '',
-    teacherModelId: form.teacherModel.split('/')[1] || form.teacherModel,
-    teacherModelVersion: form.teacherModel.split('/')[2] || '',
     calibDatasetId: form.calibDataset.split('/')[1] || form.calibDataset,
     calibDatasetVersion: form.calibDataset.split('/')[2] || '',
     hyperParams: {
@@ -284,13 +241,7 @@ function buildPayload() {
       calib_dataset: form.calibDataset,
       calib_samples: form.calibSamples,
       group_size: form.groupSize,
-      pruning_method: form.pruningMethod,
-      pruning_ratio: form.pruningRatio,
-      distill_temp: form.distillTemp,
-      distill_alpha: form.distillAlpha,
-      epochs: form.epochs,
-      teacher_model: form.teacherModel,
-      ...Object.fromEntries(form.kvParams.map(p => [p.key, p.value])),
+      ...Object.fromEntries(form.kvParams.filter(p => p.key).map(p => [p.key, p.value])),
     },
     resourceConfig: {
       poolId: form.poolId,
@@ -303,8 +254,14 @@ function buildPayload() {
 
 async function handleSave() {
   if (!form.name) { ElMessage.warning('请输入任务名称'); return }
+  if (!form.baseModel) { ElMessage.warning('请选择基础模型'); return }
+  if (!form.operator) { ElMessage.warning('请选择算子'); return }
+  if (needCalib.value && !form.calibDataset) {
+    ElMessage.warning('量化方法 GPTQ/AWQ 需要选择校准数据集')
+    return
+  }
   try {
-    if (isEdit.value) {
+    if (taskId) {
       await updateTrainTask(taskId, buildPayload())
       ElMessage.success('压缩训练任务修改已保存')
     } else {
@@ -326,30 +283,18 @@ async function loadTaskDetail() {
     form.description = task.description || ''
     form.baseModel = task.baseModelId ? buildCascaderValue(task.baseModelId, 'model', task.baseModelVersion) : ''
     form.operator = task.operatorId ? buildCascaderValue(task.operatorId, 'operator', task.operatorVersion) : ''
-    form.teacherModel = task.teacherModelId ? buildCascaderValue(task.teacherModelId, 'model', task.teacherModelVersion) : ''
     form.calibDataset = task.calibDatasetId ? buildCascaderValue(task.calibDatasetId, 'dataset', task.calibDatasetVersion) : ''
     const hp = task.hyperParams || {}
-    const compressionTypeBySubType: Record<string, string> = {
-      量化: 'quantization',
-      剪枝: 'pruning',
-      蒸馏: 'distillation',
-      '量化+蒸馏': 'quant_distill',
-    }
-    form.compressionType = compressionTypeBySubType[String(task.subType || '')] ?? String(hp.compressionType ?? form.compressionType)
+    // 兼容旧任务：剪枝/蒸馏 归一到量化
+    const subType = String(task.subType || '')
+    form.compressionType = subType === '量化+蒸馏' ? 'quant_distill' : 'quantization'
     form.quantBits = String(hp.quant_bits ?? form.quantBits)
     form.quantMethod = String(hp.quant_method ?? form.quantMethod)
-    form.calibDataset = String(hp.calib_dataset ?? form.calibDataset)
     form.calibSamples = Number(hp.calib_samples ?? form.calibSamples)
     form.groupSize = Number(hp.group_size ?? form.groupSize)
-    form.pruningMethod = String(hp.pruning_method ?? form.pruningMethod)
-    form.pruningRatio = Number(hp.pruning_ratio ?? form.pruningRatio)
-    form.distillTemp = String(hp.distill_temp ?? form.distillTemp)
-    form.distillAlpha = String(hp.distill_alpha ?? form.distillAlpha)
-    form.epochs = Number(hp.epochs ?? form.epochs)
-    form.teacherModel = String(hp.teacher_model ?? form.teacherModel)
-    const stdKeys = ['quant_bits', 'quant_method', 'calib_dataset', 'calib_samples', 'group_size', 'pruning_method', 'pruning_ratio', 'distill_temp', 'distill_alpha', 'epochs', 'teacher_model']
+    const stdKeys = new Set(['quant_bits', 'quant_method', 'calib_dataset', 'calib_samples', 'group_size'])
     form.kvParams = Object.entries(hp)
-      .filter(([k]) => !stdKeys.includes(k))
+      .filter(([k, v]) => !stdKeys.has(k) && v !== null && v !== undefined)
       .map(([key, value]) => ({ key, value: String(value) }))
     const rc = (task.resourceConfig || {}) as unknown as Record<string, unknown>
     form.poolId = String(rc.poolId ?? form.poolId)
@@ -359,7 +304,7 @@ async function loadTaskDetail() {
   } catch { /* ignore */ }
 }
 
-const { datasetTree, modelTree, operatorTree, loadDatasetOptions, loadModelOptions, loadOperatorOptions, findModelName, findDatasetName, buildCascaderValue } = useTrainOptions()
+const { datasetTree, modelTree, operatorTree, loadDatasetOptions, loadModelOptions, loadOperatorOptions, findModelName, buildCascaderValue } = useTrainOptions()
 
 onMounted(async () => {
   await Promise.all([loadDatasetOptions(), loadModelOptions(), loadOperatorOptions(), loadResourcePools()])
