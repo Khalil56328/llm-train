@@ -138,7 +138,10 @@ PKG_LIST="unzip"
 [ "$NEED_MYSQL" -eq 1 ] && PKG_LIST="$PKG_LIST mysql-server"
 [ "$NEED_REDIS" -eq 1 ] && PKG_LIST="$PKG_LIST redis-server"
 # shellcheck disable=SC2086
-$SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y $PKG_LIST
+# 注意：不要写成 `$SUDO DEBIAN_FRONTEND=... apt-get`——root 执行时 SUDO 为空，
+# bash 不会把展开后的 DEBIAN_FRONTEND= 重新识别为赋值前缀，会报 "command not found"。
+# 用 env 传环境变量，root / sudo 两种执行方式均正常。
+$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $PKG_LIST
 
 echo "==> [3/8] 启动 MySQL / Redis 并初始化数据库"
 # 加载服务启动辅助函数（兼容本机 apt / 外部已运行服务 / 无 systemd 容器三种环境）

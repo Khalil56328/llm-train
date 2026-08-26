@@ -93,7 +93,7 @@ if [ "$WITH_NGINX" -eq 1 ]; then
   echo "==> 安装 Nginx 反代（80 → 8000）"
   if ! command -v nginx >/dev/null 2>&1; then
     $SUDO apt-get update -y
-    $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y nginx
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y nginx
   fi
   $SUDO cp deploy/ubuntu/nginx.conf /etc/nginx/sites-available/llm-train
   # 停用默认站点（占 80 端口），启用平台站点

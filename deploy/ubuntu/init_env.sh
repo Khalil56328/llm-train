@@ -115,7 +115,10 @@ PKG_LIST="curl ca-certificates gnupg git unzip build-essential python3-venv pyth
 [ "$NEED_MYSQL" -eq 1 ] && PKG_LIST="$PKG_LIST mysql-server"
 [ "$NEED_REDIS" -eq 1 ] && PKG_LIST="$PKG_LIST redis-server"
 # shellcheck disable=SC2086
-$SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y $PKG_LIST
+# 注意：不要写成 `$SUDO DEBIAN_FRONTEND=... apt-get`——root 执行时 SUDO 为空，
+# bash 不会把展开后的 DEBIAN_FRONTEND= 重新识别为赋值前缀，会报 "command not found"。
+# 用 env 传环境变量，root / sudo 两种执行方式均正常。
+$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $PKG_LIST
 
 # ---------- Node.js 安装（NodeSource 20；Vite 5 要求 Node >= 18，apt 自带 18 无 npm 不可用） ----------
 install_node() {
