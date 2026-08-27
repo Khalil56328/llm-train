@@ -7,6 +7,10 @@ Wants=mysql.service redis-server.service
 Type=simple
 WorkingDirectory=__PROJECT_DIR__/backend
 Environment=PYTHONUNBUFFERED=1
+# 关键：把 venv/bin 加入 PATH，worker 进程才能通过 shutil.which("swift") 找到
+# MS-Swift 引擎命令。否则 TRAIN_EXECUTION_MODE=auto 会因找不到 swift 降级为 mock，
+# 真实训练无法执行。systemd 启动的环境默认不含 venv/bin，必须显式注入。
+Environment=PATH=__PROJECT_DIR__/backend/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=__PROJECT_DIR__/backend/.venv/bin/python -m celery -A app.tasks.worker:celery_app worker --loglevel=info
 Restart=on-failure
 RestartSec=5

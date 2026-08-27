@@ -7,6 +7,9 @@ Wants=mysql.service redis-server.service
 Type=simple
 WorkingDirectory=__PROJECT_DIR__/backend
 Environment=PYTHONUNBUFFERED=1
+# 关键：把 venv/bin 加入 PATH，API 进程内的 executor 才能通过 shutil.which("swift")
+# 找到 MS-Swift 引擎命令；否则 auto 模式会降级 mock。systemd 启动环境默认不含 venv/bin。
+Environment=PATH=__PROJECT_DIR__/backend/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=__PROJECT_DIR__/backend/.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=5
