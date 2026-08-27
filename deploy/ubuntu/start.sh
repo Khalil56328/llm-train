@@ -136,6 +136,40 @@ stop_all() {
   sleep 1
 }
 
+# 释放指定端口：按端口检测并停止占用进程。
+# 用于兜底 pid 文件不可靠的场景（如前台启动未写 pid、PID 文件丢失、uvicorn --reload 子进程残留），
+# 避免 nohup 启动时报 [Errno 98] address already in use。
+free_port() {
+  local port="$1"
+  if ! command -v fuser >/dev/null 2>&1; then
+    echo "    [WARN] 未找到 fuser，跳过端口清理（请先执行：apt-get install -y psmisc 或 lsof）"
+    return 0
+  fi
+  if ! fuser "$port/tcp" >/dev/null 2>&1; then
+    return 0  # 端口空闲
+  fi
+  echo "==> 端口 :${port} 被占用，正在停止占用进程..."
+  # fuser -k 用 SIGTERM 优雅停止监听该端口的进程（-TERM）
+  fuser -k -TERM "$port/tcp" 2>/dev/null || true
+  # 等待端口释放（最多 10s），未释放再强制 SIGKILL
+  for _ in $(seq 1 10); do
+    if ! fuser "$port/tcp" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  if fuser "$port/tcp" >/dev/null 2>&1; then
+    echo "    [WARN] 进程未响应 SIGTERM，强制停止..."
+    fuser -k -KILL "$port/tcp" 2>/dev/null || true
+    sleep 1
+  fi
+  if fuser "$port/tcp" >/dev/null 2>&1; then
+    echo "    [ERROR] 端口 :${port} 仍被占用，无法释放"
+    return 1
+  fi
+  echo "==> 端口 :${port} 已释放"
+}
+
 # ---------------------------------------------------------------------------
 # 启动/重启流程
 # ---------------------------------------------------------------------------

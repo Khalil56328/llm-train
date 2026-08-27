@@ -262,6 +262,18 @@ class SwiftEngineAdapter:
            盲目透传一个已废弃的旧参数名（如 --lora_target_modules → --target_modules）
            会让 swift argparse 报 remaining_argv 错误，导致训练无法启动。
         """
+        # 稳定标准参数：这些名字在 MS-Swift 各版本（2.x/3.x/4.x）中长期一致，直接使用，
+        # 不参与 help 探测改名。help 探测可能因输出格式/文档文字误扫而返回不准确结果
+        # （例如把 --model_id_or_path 当选项列出，但 swift 实际只认 --model），
+        # 若据此改名会生成 swift 不接受的参数（报 Please set --model 或 remaining_argv）。
+        STABLE_FLAGS = frozenset({
+            "--model", "--dataset", "--tuner_type",
+            "--learning_rate", "--max_length", "--num_train_epochs",
+            "--per_device_train_batch_size",
+        })
+        if flag in STABLE_FLAGS:
+            return flag
+
         opts = cls._swift_help_opts(subcommand)
         if opts and flag in opts:
             return flag
@@ -271,8 +283,8 @@ class SwiftEngineAdapter:
             return hyphen
         # 基础参数跨版本改名映射（2.x/3.x/4.x 参数名差异，按探测到的选项集适配）
         renamed = {
-            "--model": ("--model_id_or_path", "--model-id-or-path", "--model_path"),
-            "--dataset": ("--dataset_id_or_path", "--dataset-id-or-path", "--train_dataset", "--train-dataset"),
+            "--model": ("--model", "--model_id_or_path", "--model-id-or-path", "--model_path"),
+            "--dataset": ("--dataset", "--dataset_id_or_path", "--dataset-id-or-path", "--train_dataset", "--train-dataset"),
             "--output_dir": ("--output-dir", "--output_dir"),
             "--tuner_type": ("--train_type", "--train-type", "--tuner-type"),
             "--train_type": ("--tuner_type", "--tuner-type", "--train-type"),
