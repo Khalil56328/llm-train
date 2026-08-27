@@ -95,8 +95,13 @@ async def save_upload(
             )
         chunks.append(chunk)
     data = b"".join(chunks)
+    return save_data(data, file.filename or "unknown", sub_dir)
+
+
+def save_data(data: bytes, filename: str, sub_dir: str = "datasets") -> Dict:
+    """保存原始字节到当前存储模式，返回统一结构 {storage_path, url, size, key}"""
     size = len(data)
-    name = _safe_name(file.filename or "unknown")
+    name = _safe_name(filename)
     key = f"{sub_dir}/{uuid.uuid4().hex}/{name}"
 
     if storage_mode() == "minio":
@@ -107,7 +112,7 @@ async def save_upload(
             key,
             io.BytesIO(data),
             size,
-            content_type=file.content_type or "application/octet-stream",
+            content_type="application/octet-stream",
         )
         return {
             "storage_path": f"minio://{settings.MINIO_BUCKET}/{key}",

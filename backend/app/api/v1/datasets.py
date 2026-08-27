@@ -1,4 +1,5 @@
 """数据中心 API"""
+import asyncio
 import io
 import json
 import uuid
@@ -6,7 +7,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
-from typing import Dict
+from typing import Dict, List
 
 from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File, Form
 from fastapi.responses import Response
@@ -16,7 +17,8 @@ from app.core.auth import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.response import success_response
-from app.core.storage import read_object, save_upload
+from app.core.storage import read_object, save_data, save_upload
+from app.services.dataset_format import csv_to_jsonl
 from app.services.dataset_service import DatasetService
 from app.schemas.dataset import DatasetCreate, DatasetUpdate, DatasetVersionCreate, DatasetFileCreate
 
@@ -85,6 +87,28 @@ def _invalid_ext(file_name: str) -> bool:
     ext = Path(file_name).suffix.lower()
     allowed = {e.strip().lower() for e in settings.UPLOAD_ALLOWED_EXTS.split(",")}
     return ext not in allowed
+
+
+def _is_csv(file_name: str) -> bool:
+    return Path(file_name).suffix.lower() == ".csv"
+
+
+def _jsonl_name(file_name: str) -> str:
+    """把 csv 文件名转换为 jsonl 文件名"""
+    return Path(file_name).stem + ".jsonl"
+
+
+async def _convert_csv_to_jsonl(file: UploadFile, dataset_id: str) -> Dict:
+    """读取上传的 CSV 内容并转换为 JSONL 保存，返回统一存储结构。
+
+    转换后的 JSONL 与原 CSV 命名同源（同名 .jsonl），便于用户识别来源。
+    """
+    raw = await file.read()
+    max_size = settings.UPLOAD_MAX_SIZE_MB * 1024 * 1024
+    if max_size and len(raw) > max_size:
+        raise ValueError(f"文件大小超过限制（{max_size // (1024 * 1024)}MB）")
+    jsonl_data = csv_to_jsonl(raw, source_name=file.filename or "")
+    return save_data(jsonl_data, _jsonl_name(file.filename or "data.jsonl"), f"datasets/{dataset_id}")
 
 
 
@@ -294,9 +318,14 @@ async def upload_file(
     # 通过存储适配器保存（minio / local 自动切换），分块读取 + 大小限制
     max_size = settings.UPLOAD_MAX_SIZE_MB * 1024 * 1024
     try:
-        saved = await save_upload(
-            file, sub_dir=f"datasets/{dataset_id}", max_size=max_size
-        )
+        if _is_csv(file_name):
+            # CSV 自动转换为 JSONL，与 MS-Swift 训练格式对齐
+            saved = await _convert_csv_to_jsonl(file, dataset_id)
+            file_name = _jsonl_name(file_name)
+        else:
+            saved = await save_upload(
+                file, sub_dir=f"datasets/{dataset_id}", max_size=max_size
+            )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -364,9 +393,14 @@ async def upload_files_batch(
             })
             continue
         try:
-            saved = await save_upload(
-                file, sub_dir=f"datasets/{dataset_id}", max_size=max_size
-            )
+            if _is_csv(file_name):
+                # CSV 自动转换为 JSONL
+                saved = await _convert_csv_to_jsonl(file, dataset_id)
+                file_name = _jsonl_name(file_name)
+            else:
+                saved = await save_upload(
+                    file, sub_dir=f"datasets/{dataset_id}", max_size=max_size
+                )
             storage_path = saved["storage_path"]
             sample_count = DatasetService.count_file_rows(storage_path, file_name)
             created = await svc.create_file(
@@ -402,6 +436,127 @@ async def upload_files_batch(
             })
 
     return success_response({"batchId": batch_id, "source": source, "files": results})
+
+
+@router.post("/{dataset_id}/files/modelscope")
+async def import_modelscope_dataset(
+    dataset_id: str,
+    repo_id: str = Form(..., description="ModelScope 数据集仓库 ID，如 swift/alpaca-cleaned"),
+    sub_dir_path: str = Form("", description="仓库子目录（可选），如 data/train.csv"),
+    source: str = Form("modelscope"),
+    batch_id: str = Form(None),
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """从 ModelScope 下载数据集仓库并入库。
+
+    - repo_id: 数据集仓库 ID（形如 owner/repo），如 swift/alpaca-cleaned
+    - sub_dir_path: 仓库内子文件/子目录，留空自动下载并挑选主数据文件
+    - 下载后：若为 CSV 自动转换为 JSONL；多个文件分别登记为 DatasetFile
+    """
+    svc = DatasetService(db)
+    dataset = await _get_dataset_or_404(svc, dataset_id)
+    _ensure_owned(dataset, user)
+
+    repo_id = (repo_id or "").strip().strip("/")
+    if not repo_id or "/" not in repo_id:
+        raise HTTPException(
+            status_code=400,
+            detail="数据集仓库 ID 格式不正确，应为「所有者/仓库名」，例如 swift/alpaca-cleaned",
+        )
+
+    # 下载到临时目录（后端进程可写），避开存储适配器，方便扫描多文件
+    workdir = Path(settings.LOCAL_STORAGE_DIR) / "modelscope" / _new_batch_id()
+    if not workdir.is_absolute():
+        workdir = Path(__file__).resolve().parent.parent.parent / workdir
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        files = await asyncio.to_thread(_download_modelscope, repo_id, sub_dir_path, workdir)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"ModelScope 下载失败：{e}")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="仓库中未找到可用数据文件（json/jsonl/csv/txt/parquet）")
+
+    batch = batch_id or _new_batch_id()
+    results: List[Dict] = []
+    for local_path in files:
+        try:
+            raw = local_path.read_bytes()
+            name = local_path.name
+            if _is_csv(name):
+                converted = csv_to_jsonl(raw, source_name=name)
+                target_name = _jsonl_name(name)
+                saved = save_data(converted, target_name, f"datasets/{dataset_id}")
+                file_name = target_name
+            elif _invalid_ext(name):
+                # 跳过白名单外的文件
+                continue
+            else:
+                saved = save_data(raw, name, f"datasets/{dataset_id}")
+                file_name = name
+            sample_count = DatasetService.count_file_rows(saved["storage_path"], file_name)
+            created = await svc.create_file(
+                dataset_id,
+                {
+                    "file_name": file_name,
+                    "source": source,
+                    "status": "success",
+                    "size": saved["size"],
+                    "storage_path": saved["storage_path"],
+                    "batch_id": batch,
+                    "sample_count": sample_count,
+                },
+            )
+            results.append({
+                "id": created.get("id"),
+                "fileName": file_name,
+                "status": "success",
+                "sampleCount": sample_count,
+                "size": saved["size"],
+            })
+        except ValueError as e:
+            results.append({"fileName": local_path.name, "status": "failed", "errorMessage": str(e)})
+        except Exception:  # noqa: BLE001
+            results.append({"fileName": local_path.name, "status": "failed", "errorMessage": "文件处理失败"})
+
+    return success_response({"repoId": repo_id, "batchId": batch, "source": source, "files": results})
+
+
+def _download_modelscope(repo_id: str, sub_dir_path: str, workdir: Path) -> List[Path]:
+    """调用 ModelScope SDK 下载数据集仓库到 workdir，返回扫描到的数据文件列表。
+
+    仅在进程内同步执行（由 asyncio.to_thread 包装），避免阻塞事件循环。
+    """
+    try:
+        from modelscope.hub.snapshot_download import snapshot_download
+    except ImportError as e:  # pragma: no cover
+        raise RuntimeError("未安装 modelscope SDK，请先 pip install modelscope") from e
+
+    local_dir = snapshot_download(
+        repo_id,
+        repo_type="dataset",
+        local_dir=str(workdir),
+        allow_file_pattern="*",
+    )
+
+    base = Path(local_dir)
+    search_root = base / sub_dir_path if sub_dir_path else base
+    allowed = {e.strip().lower() for e in settings.UPLOAD_ALLOWED_EXTS.split(",")}
+    files = [
+        p
+        for p in search_root.rglob("*")
+        if p.is_file() and p.suffix.lower() in allowed
+    ]
+    # 优先数据文件：train/test/dev/验证集 排在前面
+    priority = ("train", "test", "dev", "validation", "valid", "data")
+    files.sort(key=lambda p: (
+        0 if any(k in p.name.lower() for k in priority) else 1,
+        p.name.lower(),
+    ))
+    # 仓库可能包含大量分片，限定单批登记数量避免一次全量
+    return files[: settings.UPLOAD_MAX_FILES_PER_BATCH]
 
 
 @router.delete("/files/{file_id}")

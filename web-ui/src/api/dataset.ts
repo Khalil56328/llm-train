@@ -70,6 +70,19 @@ export function downloadTemplate(name: string) {
   return download<Blob>(`${BASE}/templates/${name}`, undefined, `example_${name}.jsonl`)
 }
 
+// ========== ModelScope 下载 ==========
+export function importFromModelscope(
+  id: string,
+  formData: FormData,
+  onProgress?: (percent: number) => void,
+) {
+  return upload<{ repoId: string; batchId: string; source: string; files: DatasetFile[] }>(
+    `${BASE}/${id}/files/modelscope`,
+    formData,
+    onProgress,
+  )
+}
+
 // ========== 广场 ==========
 export function getPlazaDatasets(params: Record<string, unknown>) {
   return get<PaginatedData<Dataset>>(`${BASE}/plaza/search`, params)

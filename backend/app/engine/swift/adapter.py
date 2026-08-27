@@ -3,6 +3,7 @@ import json
 import re
 import shlex
 import sys
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Set
 
 
@@ -501,6 +502,99 @@ class SwiftEngineAdapter:
         if params:
             for key, value in params.items():
                 cmd.extend([f"--{key}", str(value)])
+        return cmd
+
+    @classmethod
+    def is_lora_checkpoint_dir(cls, path: str) -> bool:
+        """判断目录是否为 LoRA adapter checkpoint 目录（而非完整模型目录）。
+
+        LoRA 训练产物目录特征：含 adapter_config.json / adapter_model.safetensors，
+        且不含完整模型的 model-*.safetensors / pytorch_model*.bin。这样的目录无法被
+        vLLM / swift deploy 直接加载，必须先合并回基座模型。
+        """
+        p = Path(path)
+        if not p.is_dir():
+            return False
+        has_adapter = (p / "adapter_config.json").exists() or (p / "adapter_model.safetensors").exists()
+        # 若子目录含 checkpoint-N/adapter_config.json，同样视为 LoRA 产物（根目录可能是
+        # 训练输出根目录，checkpoint 在子目录中）
+        if not has_adapter:
+            try:
+                for child in p.iterdir():
+                    if child.is_dir() and (
+                        (child / "adapter_config.json").exists()
+                        or (child / "adapter_model.safetensors").exists()
+                    ):
+                        has_adapter = True
+                        break
+            except OSError:
+                pass
+        if not has_adapter:
+            return False
+        # 完整模型权重文件：model-*.safetensors 或 pytorch_model*.bin 出现即视为完整模型
+        has_full_weight = any(
+            p.glob("model-*.safetensors")
+        ) or any(p.glob("pytorch_model*.bin"))
+        return not has_full_weight
+
+    @classmethod
+    def find_lora_adapter_dir(cls, path: str) -> Optional[str]:
+        """在训练输出目录中定位 LoRA adapter checkpoint 目录。
+
+        优先使用目录自身（若它直接就是 adapter 目录）；否则扫描其下的
+        checkpoint-N 子目录，返回权重最新的一个。
+        """
+        p = Path(path)
+        if not p.is_dir():
+            return None
+        if (p / "adapter_config.json").exists() and (p / "adapter_model.safetensors").exists():
+            return str(p)
+        candidates = []
+        try:
+            for child in p.iterdir():
+                if not child.is_dir():
+                    continue
+                name = child.name
+                if name.startswith("checkpoint-") and (child / "adapter_config.json").exists():
+                    try:
+                        step = int(name.split("-")[-1])
+                    except ValueError:
+                        step = -1
+                    candidates.append((step, child))
+        except OSError:
+            return None
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[0])
+        return str(candidates[-1][1])
+
+    @classmethod
+    def build_merge_command(
+        cls,
+        base_model: str,
+        adapter_dir: str,
+        output_dir: str,
+    ) -> List[str]:
+        """生成 LoRA 权重合并命令（swift export --merge_lora）。
+
+        将训练产出的 LoRA adapter 增量权重合并回基座模型，生成一个可直接被
+        vLLM / swift deploy 加载的完整模型目录。这是 LoRA 微调产物「可部署化」
+        的关键一步。
+        """
+        cmd = cls._resolve_subcommand("swift export").split()
+        cmd_name = cmd[-1]
+        cmd.extend([cls._resolve_flag("--model", cmd_name), base_model])
+        # ms-swift 新旧版本参数差异：--adapters（推荐）或 --ckpt_dir（旧版）
+        adapter_opt = "--adapters"
+        opts = cls._swift_help_opts(cmd_name)
+        if opts and "--adapters" not in opts and "--ckpt_dir" in opts:
+            adapter_opt = "--ckpt_dir"
+        cmd.extend([adapter_opt, adapter_dir])
+        cmd.extend([cls._resolve_flag("--merge_lora", cmd_name), "true"])
+        cmd.extend([cls._resolve_flag("--output_dir", cmd_name), output_dir])
+        # 若输出目录已存在，允许覆盖（幂等重试）
+        cmd.append("--exist_ok")
+        cmd.append("true")
         return cmd
 
     @classmethod

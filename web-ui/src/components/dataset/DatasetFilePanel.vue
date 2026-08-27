@@ -96,24 +96,70 @@
         <el-form-item label="数据来源">
           <el-select v-model="uploadSource" style="width: 100%">
             <el-option label="本地上传" value="local_upload" />
+            <el-option label="ModelScope 下载" value="modelscope" />
           </el-select>
         </el-form-item>
-        <el-upload
-          drag
-          multiple
-          :auto-upload="false"
-          v-model:file-list="uploadFileList"
-          class="upload-dragger"
-          :disabled="uploading"
-        >
-          <el-icon class="upload-icon"><UploadFilled /></el-icon>
-          <div class="el-upload__text">拖拽文件或点击上传</div>
-        </el-upload>
-        <div class="example-links">
-          <span>示例下载：</span>
-          <a @click="downloadExample('sft')">SFT 格式示例</a>
-          <a @click="downloadExample('cpt')">CPT 格式示例</a>
-        </div>
+
+        <!-- ModelScope 仓库输入 -->
+        <template v-if="uploadSource === 'modelscope'">
+          <el-form-item label="数据集仓库">
+            <el-input
+              v-model="modelscopeRepo"
+              placeholder="请输入 ModelScope 数据集仓库 ID"
+              clearable
+              :disabled="uploading"
+            >
+              <template #append>
+                <el-select v-model="modelscopeExample" placeholder="示例" style="width: 190px" @change="onPickExample">
+                  <el-option
+                    v-for="opt in modelscopeExamples"
+                    :key="opt.repo"
+                    :label="opt.repo"
+                    :value="opt.repo"
+                  />
+                </el-select>
+              </template>
+            </el-input>
+          </el-form-item>
+          <el-form-item label="子路径">
+            <el-input
+              v-model="modelscopeSubPath"
+              placeholder="可选，仓库内子文件/目录，留空自动挑选主数据文件"
+              clearable
+              :disabled="uploading"
+            />
+          </el-form-item>
+          <div class="modelscope-tip">
+            <el-alert type="info" :closable="false" show-icon>
+              <template #title>
+                支持 swift/alpaca-cleaned、AI-ModelScope/alpaca-gpt4-data-zh 等
+                数据集仓库。仓库内 CSV 将自动转换为 MS-Swift 标准的 JSONL 格式入库。
+              </template>
+            </el-alert>
+          </div>
+        </template>
+
+        <!-- 本地上传 -->
+        <template v-if="uploadSource === 'local_upload'">
+          <el-upload
+            drag
+            multiple
+            :auto-upload="false"
+            v-model:file-list="uploadFileList"
+            class="upload-dragger"
+            :disabled="uploading"
+          >
+            <el-icon class="upload-icon"><UploadFilled /></el-icon>
+            <div class="el-upload__text">拖拽文件或点击上传</div>
+          </el-upload>
+          <div class="example-links">
+            <span>示例下载：</span>
+            <a @click="downloadExample('sft')">SFT 格式示例</a>
+            <a @click="downloadExample('cpt')">CPT 格式示例</a>
+          </div>
+          <div class="csv-tip">提示：上传的 CSV 文件会自动转换为 JSONL 训练格式。</div>
+        </template>
+
         <div v-if="uploadJobs.length" class="upload-jobs">
           <div v-for="job in uploadJobs" :key="job.uid" class="upload-job">
             <span class="job-name" :title="job.name">{{ job.name }}</span>
@@ -131,7 +177,9 @@
       </el-form>
       <template #footer>
         <el-button @click="closeUploadDialog">取消</el-button>
-        <el-button type="primary" :loading="uploading" @click="submitUpload">提交</el-button>
+        <el-button type="primary" :loading="uploading" @click="submitUpload">
+          {{ uploadSource === 'modelscope' ? '下载' : '提交' }}
+        </el-button>
       </template>
     </el-dialog>
   </div>
@@ -153,6 +201,7 @@ import {
   getCollectTasks,
   downloadDatasetFile,
   downloadTemplate,
+  importFromModelscope,
 } from '@/api/dataset'
 import type { Dataset, DatasetFile, CollectTask, DatasetFileSource } from '@/types'
 
@@ -188,6 +237,17 @@ const uploading = ref(false)
 const uploadFileList = ref<UploadUserFile[]>([])
 const uploadJobs = ref<UploadJob[]>([])
 
+// ModelScope 下载
+const modelscopeRepo = ref('')
+const modelscopeSubPath = ref('')
+const modelscopeExample = ref('')
+const modelscopeExamples = [
+  { repo: 'swift/alpaca-cleaned', desc: '指令微调（SFT）' },
+  { repo: 'AI-ModelScope/alpaca-gpt4-data-zh', desc: '中文 SFT' },
+  { repo: 'swift/self-cognition', desc: '自我认知' },
+  { repo: 'blossom-org/Blossom-Chinese', desc: '中文对话' },
+]
+
 let uidSeq = Date.now()
 
 const columns: ColumnConfig[] = [
@@ -219,7 +279,12 @@ const columns: ColumnConfig[] = [
 
 function sourceText(source?: string) {
   if (source === 'platform') return '平台数据'
+  if (source === 'modelscope') return 'ModelScope'
   return '本地上传'
+}
+
+function onPickExample(repo: string) {
+  modelscopeRepo.value = repo
 }
 
 function taskStatusText(status: string) {
@@ -286,6 +351,10 @@ function handleReset() {
 function openUploadDialog() {
   uploadFileList.value = []
   uploadJobs.value = []
+  modelscopeRepo.value = ''
+  modelscopeSubPath.value = ''
+  modelscopeExample.value = ''
+  uploadSource.value = 'local_upload'
   uploadDialog.value = true
 }
 
@@ -313,7 +382,48 @@ async function uploadOne(job: UploadJob, batchId: string) {
   })
 }
 
+async function submitModelscope() {
+  const repo = modelscopeRepo.value.trim()
+  if (!repo) {
+    ElMessage.warning('请输入 ModelScope 数据集仓库 ID')
+    return
+  }
+  if (!repo.includes('/')) {
+    ElMessage.warning('仓库 ID 应为「所有者/仓库名」格式，例如 swift/alpaca-cleaned')
+    return
+  }
+  uploading.value = true
+  try {
+    const form = new FormData()
+    form.append('repo_id', repo)
+    form.append('sub_dir_path', modelscopeSubPath.value.trim())
+    form.append('source', 'modelscope')
+    form.append('batch_id', `modelscope_${uidSeq}_${Math.random().toString(36).slice(2, 8)}`)
+    const res = await importFromModelscope(props.datasetId, form)
+    const failed = (res.files || []).filter((f) => f.status === 'failed')
+    if (!failed.length) {
+      ElMessage.success(`ModelScope 数据集下载成功，共 ${res.files?.length || 0} 个文件`)
+    } else {
+      ElMessage.warning(`下载完成，其中 ${failed.length} 个文件失败`)
+    }
+    finishUploadSuccess()
+    await fetchFiles()
+    await fetchStats()
+    await fetchCollectTasks()
+  } catch (e) {
+    ElMessage.error((e as Error)?.message || 'ModelScope 下载失败')
+  } finally {
+    uploading.value = false
+  }
+}
+
 async function submitUpload() {
+  // ModelScope 模式：走仓库下载
+  if (uploadSource.value === 'modelscope') {
+    await submitModelscope()
+    return
+  }
+
   if (!uploadFileList.value.length) {
     ElMessage.warning('请选择文件')
     return
@@ -532,6 +642,16 @@ onMounted(async () => {
       text-decoration: underline;
       cursor: pointer;
     }
+  }
+
+  .modelscope-tip {
+    margin-top: 12px;
+  }
+
+  .csv-tip {
+    margin-top: 10px;
+    color: $text-secondary;
+    font-size: 12px;
   }
 
   .upload-jobs {

@@ -379,7 +379,7 @@ export interface Dataset {
 export type DatasetFileStatus = 'processing' | 'success' | 'failed'
 
 // 数据集文件来源（采集方式）统一枚举
-export type DatasetFileSource = 'local_upload' | 'platform'
+export type DatasetFileSource = 'local_upload' | 'platform' | 'modelscope'
 
 export interface DatasetFile {
   id: string

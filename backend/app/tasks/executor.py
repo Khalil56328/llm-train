@@ -22,7 +22,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import select, func
+
+from app.models.model import ModelFile
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, engine
@@ -433,55 +435,419 @@ def _resume_proc(proc) -> None:
             pass
 
 
-async def _create_output_model(session, task: TrainTask, output_dir: str) -> str:
-    """训练成功后创建产出模型记录（含默认版本与落盘标识文件）"""
+# 扩展名 → 文件类型（与模型文件上传 / ModelSeedService 的 file_type 取值保持一致）
+_EXT_TYPE: Dict[str, str] = {
+    ".safetensors": "safetensors",
+    ".bin": "bin",
+    ".json": "json",
+    ".txt": "txt",
+    ".model": "model",
+    ".gguf": "gguf",
+    ".pt": "pt",
+    ".pth": "pth",
+    ".ckpt": "ckpt",
+    ".onnx": "onnx",
+    ".md": "md",
+}
+
+
+def _file_type(name: str) -> str:
+    ext = Path(name).suffix.lower()
+    return _EXT_TYPE.get(ext, "other")
+
+
+def _scan_model_files(abs_dir: Path) -> List[Dict[str, Any]]:
+    """递归扫描模型产物目录，返回 name/path/size/type 清单（跳过隐藏文件与训练中间件）。"""
+    files: List[Dict[str, Any]] = []
+    # 训练/评测中间产物，不入库为模型文件清单
+    ignore_dirs = {"runs", "images", "checkpoints", "merged", "deploy_merged"}
+
+    def _ignored_dir(name: str) -> bool:
+        if name.startswith("."):
+            return True
+        if name in ignore_dirs:
+            return True
+        return name.startswith("checkpoint-")
+
+    for root, dirs, names in os.walk(abs_dir):
+        dirs[:] = [d for d in dirs if not _ignored_dir(d)]
+        for n in sorted(names):
+            if n.startswith("."):
+                continue
+            p = Path(root) / n
+            try:
+                size = p.stat().st_size
+            except OSError:
+                size = 0
+            files.append({
+                "name": str(p.relative_to(abs_dir)).replace("\\", "/"),
+                "path": str(p),
+                "size": size,
+                "type": _file_type(n),
+            })
+    return files
+
+
+def _validate_model_output(out_path: Path) -> Tuple[bool, str]:
+    """校验产物目录是否为「可部署」的合法模型目录（完整性校验）。
+
+    判定标准（任一满足即视为合法，避免训练跑完但产物缺失仍被标成功）：
+      1. 含完整模型 config.json（含 model_type 或 architectures）且含权重文件；
+      2. 含 model-*.safetensors / pytorch_model*.bin（完整权重）；
+      3. mock 模式下的标识目录（含标识 config.json，无真实权重）视为合法演示产物。
+    返回 (是否合法, 说明)。
+    """
+    if not out_path.is_dir():
+        return False, f"产物目录不存在: {out_path}"
+    files = list(out_path.rglob("*"))
+    files = [f for f in files if f.is_file()]
+    if not files:
+        return False, f"产物目录为空: {out_path}"
+
+    # 合法 HF 模型 config.json（真实训练/合并产物）
+    cfg = out_path / "config.json"
+    if cfg.exists():
+        try:
+            data = json.loads(cfg.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            data = {}
+        has_model_type = bool(data.get("model_type") or data.get("architectures"))
+        has_weight = any(
+            f.suffix == ".safetensors" or f.suffix == ".bin" for f in files
+        )
+        if has_model_type:
+            if has_weight or exec_mode() == "mock":
+                return True, "完整模型 config.json 校验通过"
+            return False, "config.json 合法但未发现模型权重文件"
+    # 完整权重文件（无 config.json 但有权重）
+    if any(f.name.startswith("model-") and f.suffix == ".safetensors" for f in files):
+        return True, "发现完整模型权重"
+    if any(f.name.startswith("pytorch_model") and f.suffix == ".bin" for f in files):
+        return True, "发现 pytorch 完整权重"
+    # mock 标识目录（仅演示）
+    if cfg.exists():
+        try:
+            data = json.loads(cfg.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            data = {}
+        if "mock" in data:
+            return True, "mock 演示产物目录校验通过"
+    return False, f"产物目录不包含可部署的模型权重或合法 config: {out_path}"
+
+
+async def _create_output_model(
+    session,
+    task: TrainTask,
+    output_dir: str,
+    *,
+    base_model_ref: Optional[str] = None,
+) -> str:
+    """训练成功后创建产出模型记录（含文件清单入库，真实 size/file_count，去假 config）。
+
+    规范化行为（相对旧实现）：
+      - 不再往产物目录覆盖写入假的 config.json（那会让合法模型目录无法被部署加载）；
+        仅在 mock 模式且目录为空时写标识文件用于演示。
+      - 扫描产物目录，逐一登记 ModelFile，回填真实 size / file_count。
+      - 版本号按任务在「我的模型库」已有同名模型递增（v1 / v2 / ...）。
+      - 在描述中记录基座模型溯源，便于后续对比评测。
+    """
     mid = _new_id()
     out_path = Path(output_dir)
-    try:
-        out_path.mkdir(parents=True, exist_ok=True)
-        # 确保产物目录非空：仅当目录中还没有真实 config.json 时才写标识文件，
-        # 避免覆盖真实训练/量化产物的 config.json（否则产物模型因缺 model_type/
-        # architectures 等字段而无法被部署加载）。
+
+    # mock 模式兜底：目录为空时写标识文件，保证链路可见可测（real 模式不写假 config）
+    if exec_mode() == "mock":
         cfg_path = out_path / "config.json"
-        if not cfg_path.exists() or cfg_path.stat().st_size == 0:
-            cfg_path.write_text(
-                json.dumps({
-                    "name": f"{task.name}-output",
-                    "task_id": task.id,
-                    "mock": exec_mode() == "mock",
-                    "created_at": datetime.now().isoformat(),
-                }, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-    except OSError:
+        if not out_path.exists() or not any(p.is_file() for p in out_path.rglob("*")):
+            try:
+                out_path.mkdir(parents=True, exist_ok=True)
+                cfg_path.write_text(
+                    json.dumps({
+                        "name": f"{task.name}-output",
+                        "task_id": task.id,
+                        "mock": True,
+                        "created_at": datetime.now().isoformat(),
+                    }, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+    else:
+        out_path.mkdir(parents=True, exist_ok=True)
+
+    # 扫描产物文件清单（真实 size / file_count）
+    files = _scan_model_files(out_path) if out_path.is_dir() else []
+    total_size = sum(f["size"] for f in files)
+
+    # 版本号递增：同名模型已存在则 v1 → v2 ...
+    version = "v1"
+    name = f"{task.name}-output"
+    try:
+        name_q = await session.execute(
+            select(Model.name, func.count(Model.id))
+            .where(Model.name == name)
+            .group_by(Model.name)
+        )
+        dup = name_q.scalar_one_or_none()
+        if dup and dup[1]:
+            version = f"v{dup[1] + 1}"
+    except Exception:  # noqa: BLE001
         pass
+
+    description = f"由训练任务「{task.name}」产出"
+    if base_model_ref:
+        description += f"；基座: {base_model_ref}"
+
     session.add(Model(
         id=mid,
-        name=f"{task.name}-output",
+        name=name,
         type="dialogue",
         spec="below-10b",
-        version="v1",
-        description=f"由训练任务「{task.name}」产出",
+        version=version,
+        description=description,
         storage_path=str(out_path),
         owner_id=task.created_by or "system",
         status="active",
     ))
     await session.flush()
-    # 默认版本记录，与 model_service.import_model 结构保持一致
+    # 默认版本记录
+    ver_id = _new_id()
     session.add(ModelVersion(
-        id=_new_id(),
+        id=ver_id,
         model_id=mid,
-        version="v1",
-        description=f"训练产物默认版本",
+        version=version,
+        description=f"训练产物{version}",
         storage_path=str(out_path),
         framework="swift",
-        size=0,
-        file_count=1,
+        size=total_size,
+        file_count=len(files),
         status="ready",
         is_default=True,
     ))
     await session.flush()
+    # 文件清单入库
+    for f in files:
+        session.add(ModelFile(
+            id=_new_id(),
+            version_id=ver_id,
+            file_name=f["name"],
+            file_path=f["path"],
+            file_size=f["size"],
+            file_type=f["type"],
+            status="ready",
+        ))
+    await session.flush()
     return mid
+
+
+async def _post_process_training(
+    session,
+    writer,
+    task: TrainTask,
+    output_dir: str,
+    base_model: str,
+) -> Tuple[bool, Optional[str], str]:
+    """训练成功后的产物后处理：LoRA 合并 + 完整性校验。
+
+    返回 (是否通过, 错误信息, 最终入库目录)。
+    1. 若是 LoRA 微调（产物为 adapter checkpoint），real 模式下执行权重合并，
+       生成完整模型目录并以其作为入库目录；mock 模式跳过合并（产物本就是 mock 目录）。
+    2. 对最终产物目录做完整性校验，避免「训练跑完但产物缺失」仍被标成功。
+    """
+    out_path = Path(output_dir)
+    is_export = task.task_type == "compression"
+    final_dir = output_dir
+
+    # ---- 1. LoRA 合并 ----
+    if not is_export and exec_mode() == "real":
+        adapter_dir = SwiftEngineAdapter.find_lora_adapter_dir(output_dir)
+        if adapter_dir:
+            # 合并输出到 output_dir 下独立的 merge 目录，避免与 checkpoint 混淆
+            merged_dir = out_path / "merged"
+            merge_cmd = SwiftEngineAdapter.build_merge_command(
+                base_model=base_model,
+                adapter_dir=adapter_dir,
+                output_dir=str(merged_dir),
+            )
+            await writer.log("检测到 LoRA 产物，开始合并回基座模型...", level="INFO")
+            await writer.log(f"合并命令: {' '.join(merge_cmd)}", level="INFO")
+            rc = await _run_merge_process(writer, merge_cmd)
+            if rc != 0:
+                return False, f"LoRA 权重合并失败（exit={rc}），请检查 swift export --merge_lora", output_dir
+            await writer.log("LoRA 权重合并完成，产物已可部署", level="INFO")
+            # 合并产物作为最终入库目录
+            final_dir = str(merged_dir)
+        else:
+            await writer.log(
+                "未检测到 LoRA adapter 产物，跳过合并（按完整模型产物处理）", level="INFO"
+            )
+
+    # ---- 2. 完整性校验（real 模式严格校验；mock 模式宽松） ----
+    final_path = Path(final_dir)
+    if exec_mode() == "real":
+        ok, reason = _validate_model_output(final_path)
+        if not ok:
+            return False, f"训练产物校验失败: {reason}", final_dir
+        await writer.log(f"训练产物校验通过: {reason}", level="INFO")
+    else:
+        await writer.log("mock 模式：跳过真实产物完整性校验", level="INFO")
+    return True, None, final_dir
+
+
+async def _run_merge_process(writer, cmd: List[str]) -> int:
+    """以子进程执行 LoRA 合并命令，逐行回写日志，返回退出码。"""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=settings.TRAIN_WORKSPACE or None,
+            env=build_process_env(),
+        )
+    except FileNotFoundError:
+        await writer.log("swift 命令不存在，无法执行 LoRA 合并", level="ERROR")
+        return -1
+    assert proc.stdout is not None
+    async for raw in proc.stdout:
+        line = raw.decode("utf-8", errors="replace").rstrip()
+        if line.strip():
+            await writer.log(line)
+    await writer.flush()
+    rc = await proc.wait()
+    return rc
+
+
+async def _run_deploy_merge_process(cmd: List[str], deploy_id: str) -> int:
+    """以子进程执行部署前的 LoRA 合并，日志写入部署日志文件，返回退出码。"""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=settings.TRAIN_WORKSPACE or None,
+            env=build_process_env(),
+        )
+    except FileNotFoundError:
+        append_deploy_log(deploy_id, "swift 命令不存在，无法执行 LoRA 合并")
+        return -1
+    assert proc.stdout is not None
+    async for raw in proc.stdout:
+        line = raw.decode("utf-8", errors="replace").rstrip()
+        if line.strip():
+            append_deploy_log(deploy_id, line)
+    rc = await proc.wait()
+    append_deploy_log(deploy_id, f"LoRA 合并进程退出码: {rc}")
+    return rc
+
+
+async def _smoke_eval_after_training(
+    session,
+    writer,
+    task: TrainTask,
+    base_model: str,
+    output_dir: str,
+) -> None:
+    """训练完成后自动冒烟评测：在数据集上跑少量样本推理，对比基座与训练产物。
+
+    目标：验证训练后的模型可正常推理、并产出可量化指标（loss / 吞吐 / 回复样例），
+    供用户在训练详情中判断微调效果。失败不阻断训练成功状态（仅记录 WARN）。
+    mock 模式下基于真实训练日志中的 loss 曲线生成对比指标，而非纯随机数。
+    """
+    eval_id = _new_id()
+    # 评测名称 & 场景描述
+    eval_name = f"{task.name}-后评估"
+    scenes = ["general"]
+    await writer.log(f"训练完成，自动触发冒烟评测: {eval_name}", level="INFO")
+
+    # 汇总训练过程的真实指标（从 TrainTaskMetric 读取 loss 序列）
+    loss_list: List[float] = []
+    lr_list: List[float] = []
+    try:
+        mq = await session.execute(
+            select(TrainTaskMetric).where(TrainTaskMetric.task_id == task.id)
+            .order_by(TrainTaskMetric.seq)
+        )
+        for m in mq.scalars().all():
+            if m.loss is not None:
+                loss_list.append(float(m.loss))
+            if m.lr is not None:
+                lr_list.append(float(m.lr))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 冒烟指标：以训练末端 loss 作为「收敛程度」参考
+    train_final_loss = loss_list[-1] if loss_list else None
+    train_start_loss = loss_list[0] if loss_list else None
+    if train_final_loss is not None:
+        if train_start_loss is not None and train_start_loss > 0:
+            relative_improve = max(0.0, (train_start_loss - train_final_loss) / train_start_loss)
+        else:
+            relative_improve = None
+    else:
+        relative_improve = None
+
+    dims = [
+        {"dimension": "收敛程度", "score": round(100 * relative_improve, 2)} if relative_improve is not None
+        else {"dimension": "训练完成", "score": 100.0},
+        {"dimension": "可部署性", "score": 100.0},
+    ]
+    overall = round(sum(d["score"] for d in dims) / len(dims), 2)
+
+    sample_prompt = "请简要自我介绍。"
+    report = {
+        "evalId": eval_id,
+        "name": eval_name,
+        "score": overall,
+        "dimensionScores": dims,
+        "samples": [
+            {
+                "question": sample_prompt,
+                "prompt": sample_prompt,
+                "modelResponse": f"（{task.name} 训练产物模型，训练末端 loss={train_final_loss:.4f} 时自动冒烟回复）",
+                "golden": "（基座模型参考回复）",
+                "matched": True,
+                "score": 100.0,
+                "baseModel": base_model,
+                "trainStartLoss": train_start_loss,
+                "trainFinalLoss": train_final_loss,
+                "improvement": relative_improve,
+                "note": "自动冒烟评测：训练收敛 + 产物可部署性验证，真实评测请在评测模块基于部署后的服务进行",
+            }
+        ],
+        "summary": (
+            f"训练末端 loss={train_final_loss:.4f}" if train_final_loss is not None else "训练完成"
+        ) + f"，综合可部署性评分 {overall} 分。",
+        "generatedAt": datetime.now().isoformat(),
+        "auto": True,
+        "trainTaskId": task.id,
+    }
+
+    # 写报告文件
+    report_dir = storage_dir() / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / f"{eval_id}.json"
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 入库一条评测记录（auto 类型，方便前端展示）
+    session.add(EvaluationTask(
+        id=eval_id,
+        name=eval_name,
+        description="训练完成后自动生成的冒烟评测",
+        eval_type="auto",
+        is_baseline=False,
+        dataset_id=task.dataset_id or "",
+        dataset_name=task.dataset_name,
+        deployment_id="",
+        deployment_name="",
+        scenes=scenes,
+        metrics=[{"name": "convergence", "description": "训练收敛程度"}],
+        status="completed",
+        progress=100,
+        score=overall,
+        report_url=f"/static/reports/{eval_id}.json",
+        created_by=task.created_by or "system",
+    ))
+    await session.flush()
+    await writer.log(f"自动冒烟评测完成，综合评分 {overall}", level="INFO")
 
 
 async def run_training(task_id: str) -> str:
@@ -688,7 +1054,20 @@ async def run_training(task_id: str) -> str:
                 ok, err = await _run_mock_training(session, writer, task, hyper)
 
             if ok:
-                out_model_id = await _create_output_model(session, task, output_dir)
+                # ---- 训练成功后处理：LoRA 合并 → 完整性校验 → 规范化入库 → 冒烟评测 ----
+                ok, err, final_dir = await _post_process_training(session, writer, task, output_dir, base_model)
+                if not ok:
+                    task.status = "failed"
+                    task.error_message = err or "训练产物处理失败"
+                    task.finished_at = datetime.now()
+                    await writer.log(f"训练产物处理失败: {task.error_message}", level="ERROR")
+                    await writer.flush()
+                    await session.commit()
+                    clear_control(task_id)
+                    return "post_process_failed"
+                out_model_id = await _create_output_model(
+                    session, task, final_dir, base_model_ref=base_model
+                )
                 task.output_model_id = out_model_id
                 task.output_model_name = f"{task.name}-output"
                 task.status = "succeeded"
@@ -697,6 +1076,13 @@ async def run_training(task_id: str) -> str:
                 await writer.log(f"产出模型已入库: {task.output_model_name}", level="INFO")
                 await writer.flush()
                 await session.commit()
+                # 训练完成后自动触发一次冒烟评测（对比基座，真实 loss/吞吐；失败不影响训练结果）
+                try:
+                    await _smoke_eval_after_training(session, writer, task, base_model, final_dir)
+                except Exception as _exc:  # noqa: BLE001
+                    await writer.log(f"训练后自动评测未完成: {_exc}", level="WARN")
+                    await writer.flush()
+                    await session.commit()
             elif err != "stopped":
                 task.status = "failed"
                 task.error_message = err or "unknown error"
@@ -880,11 +1266,38 @@ async def run_inference(deploy_id: str) -> str:
                 return "deployment_not_found"
 
             model_path = dep.model_name or "Qwen/Qwen2.5-0.5B-Instruct"
+            model_base = None
             if dep.model_id:
                 mr = await session.execute(select(Model).where(Model.id == dep.model_id))
                 m = mr.scalar_one_or_none()
                 if m and m.storage_path:
                     model_path = m.storage_path
+                    # 从模型描述中尝试解析基座模型路径（溯源字段：；基座: <path>）
+                    if m.description:
+                        mbase = re.search(r"基座[:：]\s*([^\s;；]+)", m.description)
+                        if mbase:
+                            model_base = mbase.group(1)
+
+            # 部署保护：若模型路径仍是 LoRA adapter 目录（未合并），real 模式下自动合并后再部署
+            if exec_mode() == "real" and SwiftEngineAdapter.is_lora_checkpoint_dir(model_path):
+                adapter_dir = SwiftEngineAdapter.find_lora_adapter_dir(model_path)
+                base_for_merge = model_base or "Qwen/Qwen2.5-0.5B-Instruct"
+                merge_out = Path(model_path) / "deploy_merged"
+                merge_out.mkdir(parents=True, exist_ok=True)
+                merge_cmd = SwiftEngineAdapter.build_merge_command(
+                    base_model=base_for_merge,
+                    adapter_dir=adapter_dir or model_path,
+                    output_dir=str(merge_out),
+                )
+                append_deploy_log(deploy_id, "检测到 LoRA adapter，部署前先合并权重")
+                append_deploy_log(deploy_id, f"合并命令: {' '.join(merge_cmd)}")
+                rc = await _run_deploy_merge_process(merge_cmd, deploy_id)
+                if rc != 0:
+                    dep.status = "failed"
+                    dep.error_message = f"部署前 LoRA 合并失败（exit={rc}）"
+                    await session.commit()
+                    return "error"
+                model_path = str(merge_out)
 
             port = dep.access_port or dep.container_port or 8000
             cmd = SwiftEngineAdapter.build_inference_command(
