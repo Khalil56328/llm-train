@@ -70,15 +70,21 @@ if ! "$PY_BIN" -c "import modelscope" 2>/dev/null; then
     exit 1
   fi
 fi
-if ! command -v modelscope >/dev/null 2>&1; then
-  # modelscope 新版可能只提供 python -m modelscope 入口
-  if ! "$PY_BIN" -m modelscope --help >/dev/null 2>&1; then
-    echo "[ERROR] modelscope CLI 不可用，请确认安装成功（$PY_BIN -m pip install modelscope）"
-    exit 1
-  fi
-  MS_CLI=("$PY_BIN" -m modelscope)
-else
+
+# 确定 modelscope 下载方式：
+#   1. 优先检查 venv/bin/modelscope（pip 安装时生成的 console_scripts 入口点）
+#   2. 再检查系统 PATH 中的 modelscope（Notebook 预装场景）
+#   3. 均不可用时回退到 Python SDK（snapshot_download API），不依赖 CLI
+# 注：modelscope ≥1.14 移除了 __main__.py，python -m modelscope 不可用
+VENV_BIN="$PROJECT_ROOT/backend/.venv/bin"
+USE_SDK=0
+if [ -x "$VENV_BIN/modelscope" ]; then
+  MS_CLI=("$VENV_BIN/modelscope")
+elif command -v modelscope >/dev/null 2>&1; then
   MS_CLI=(modelscope)
+else
+  echo "    [INFO] modelscope CLI 未在 PATH 中，将使用 Python SDK API 下载"
+  USE_SDK=1
 fi
 
 mkdir -p "$ROOT_DIR"
@@ -92,10 +98,20 @@ download_one() {
     echo "    目录已存在且非空，跳过下载（如需重新下载请先删除该目录）"
   else
     mkdir -p "$abs_dir"
-    if [ "$kind" = "model" ]; then
-      "${MS_CLI[@]}" download --model "$id" --local_dir "$abs_dir"
+    if [ "$USE_SDK" -eq 1 ]; then
+      # 回退：使用 Python SDK（snapshot_download API）下载
+      "$PY_BIN" -c "
+import sys
+from modelscope.hub.snapshot_download import snapshot_download
+model_id, local_dir, repo_type = sys.argv[1], sys.argv[2], sys.argv[3]
+snapshot_download(model_id, local_dir=local_dir, repo_type=repo_type)
+" "$id" "$abs_dir" "$kind"
     else
-      "${MS_CLI[@]}" download --dataset "$id" --local_dir "$abs_dir"
+      if [ "$kind" = "model" ]; then
+        "${MS_CLI[@]}" download --model "$id" --local_dir "$abs_dir"
+      else
+        "${MS_CLI[@]}" download --dataset "$id" --local_dir "$abs_dir"
+      fi
     fi
   fi
   echo ""

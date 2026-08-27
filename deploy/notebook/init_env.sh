@@ -184,24 +184,28 @@ fi
 
 echo "==> [5/8] 安装训练/推理引擎（MS-Swift + vLLM）"
 echo "    镜像自带 torch 2.10.0（CUDA 12.8.1 / py312）；此处仅安装上层引擎"
+# vLLM 对 torch 精确锁定（==），版本不匹配会导致 import 失败：
+#   vllm 0.17~0.19 → torch==2.10.0  |  vllm 0.20+ → torch==2.11.0
+# 镜像自带 torch 2.10.0+cu128，须锁定 vllm<=0.19.x。
+VLLM_VERSION="${VLLM_VERSION:-0.19.0}"
 TORCH_BEFORE="$(python3 -c 'import torch;print(torch.__version__)' 2>/dev/null || echo '?')"
 echo "    安装前 torch: ${TORCH_BEFORE}"
 # 不再固定 ms-swift==2.5.1：2.5.1（2024-11）与 torch 2.10.0 / py312 时代错位，
 # 其依赖（transformers/trl 等）解析到最新版后运行期不兼容；直接装最新版（3.x/4.x 官方支持 py312）。
 if [ -n "$PIP_INDEX_URL" ]; then
-  python3 -m pip install --no-cache-dir ms-swift vllm --index-url "$PIP_INDEX_URL" || {
+  python3 -m pip install --no-cache-dir ms-swift "vllm==${VLLM_VERSION}" \
+      --extra-index-url "https://download.pytorch.org/whl/cu128" \
+      --index-url "$PIP_INDEX_URL" || {
     echo "    [WARN] 引擎安装未完全成功；TRAIN_EXECUTION_MODE=auto 会自动降级 mock，可先跑通业务流"
   }
 else
-  python3 -m pip install --no-cache-dir ms-swift vllm || {
+  python3 -m pip install --no-cache-dir ms-swift "vllm==${VLLM_VERSION}" \
+      --extra-index-url "https://download.pytorch.org/whl/cu128" || {
     echo "    [WARN] 引擎安装未完全成功；TRAIN_EXECUTION_MODE=auto 会自动降级 mock，可先跑通业务流"
   }
 fi
-# torch 防降级校验：vLLM / ms-swift 的依赖解析可能重装或降级 torch。
-# 注意：新版 vLLM（0.11.x）会按自身依赖把 torch 锁定到特定版本（如 2.8.0），
-#       此时强行恢复镜像自带版本反而会导致 vLLM import 失败。
-# 因此：只要新版本仍是 cu128（CUDA 12.8）构建就与镜像 CUDA 12.8.1 兼容，直接保留；
-#       仅当 torch 被换成非 cu128 构建（如 +cpu）时才从镜像源恢复。
+# torch 防降级校验：vLLM 精确锁定 torch 版本（如 vllm 0.19.0 锁 torch==2.10.0），
+# 正常情况下安装后 torch 版本应不变。若因依赖冲突被换成非 cu128 构建才需恢复。
 TORCH_AFTER="$(python3 -c 'import torch;print(torch.__version__)' 2>/dev/null || echo '?')"
 echo "    安装后 torch: ${TORCH_AFTER}"
 if [ "$TORCH_BEFORE" != "?" ] && [ "$TORCH_AFTER" != "?" ] && [ "$TORCH_BEFORE" != "$TORCH_AFTER" ]; then
@@ -312,7 +316,7 @@ echo "==> 生成演示数据集（SFT / 偏好 / 预训练文本，供训练向�
 if python3 deploy/common/seed_demo_data.py --root backend/workspace --samples 200; then
   echo "    演示数据集已生成（backend/workspace/datasets/），后端启动时自动录入数据集管理"
 else
-  echo "    [WARN] 演示数据集生成失败（网络或 modelscope 问题），可稍后手动执行："
+  echo "    [WARN] 演示数据集生成失败，可稍后手动执行："
   echo "           python3 deploy/common/seed_demo_data.py --root backend/workspace"
 fi
 

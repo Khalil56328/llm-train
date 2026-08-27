@@ -20,8 +20,10 @@
 # 环境变量（可选）：
 #   PIP_INDEX_URL     pip 镜像源（国内网络可设 https://pypi.tuna.tsinghua.edu.cn/simple）
 #   NPM_REGISTRY      npm 镜像源（默认 https://registry.npmmirror.com）
-#   CUDA_VERSION      torch 轮子的 CUDA 版本（默认 cu128；驱动 <570 时可改 cu124 并配 TORCH_VERSION=2.9.0）
-#   TORCH_VERSION     要安装的 torch 版本（默认 2.10.0，与已验证 Notebook 镜像对齐）
+#   CUDA_VERSION      torch 轮子的 CUDA 版本（默认 cu128；驱动 <570 时可改 cu124）
+#   TORCH_VERSION     torch 版本（默认 2.10.0；改版本时须同步调整 VLLM_VERSION）
+#   VLLM_VERSION      vllm 版本（默认 0.19.0；须与 TORCH_VERSION 严格对应：
+#                       vllm 0.17~0.19→torch 2.10 | vllm 0.20+→torch 2.11 | vllm 0.13~0.16→torch 2.9.x）
 # ============================================================
 set -euo pipefail
 
@@ -56,8 +58,35 @@ source "$PROJECT_ROOT/deploy/common/lib_services.sh"
 # 可选环境变量默认值
 PIP_INDEX_URL="${PIP_INDEX_URL:-}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
+# 默认值对齐：CUDA 12.8（cu128）+ torch 2.10.0 + vllm 0.19.0。
+# vLLM 对 torch 采取精确锁定（==），版本不匹配则 import 或运行失败：
+#   vllm 0.17~0.19 → torch==2.10.0  |  vllm 0.20+ → torch==2.11.0  |  vllm 0.13~0.16 → torch==2.9.x
+# 当前默认 cu128+torch2.10.0+vllm0.19.0 是 CUDA 12.8 驱动下的稳定组合；
+# 若需更新引擎，设置 TORCH_VERSION=2.11.0 VLLM_VERSION=0.23.0（cu128 同样有 torch 2.11.0 构建）。
 CUDA_VERSION="${CUDA_VERSION:-cu128}"
 TORCH_VERSION="${TORCH_VERSION:-2.10.0}"
+VLLM_VERSION="${VLLM_VERSION:-0.19.0}"
+# torch/torchvision/torchaudio 版本配套（torchvision 主版本比 torch 低，torchaudio 与 torch 同号）。
+# 可分别用 TORCHVISION_VERSION / TORCHAUDIO_VERSION 覆盖；默认按 TORCH_VERSION 推导，避免
+# 重跑脚本时 torchvision/torchaudio 未锁版本被 pip 拉到新版，连带把 torch 升级成不匹配的构建。
+TORCHVISION_VERSION="${TORCHVISION_VERSION:-}"
+TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-}"
+if [ -z "$TORCHVISION_VERSION" ] || [ -z "$TORCHAUDIO_VERSION" ]; then
+  case "$TORCH_VERSION" in
+    2.11*) TV=0.26.0; TA=2.11.0 ;;
+    2.10*) TV=0.25.0; TA=2.10.0 ;;
+    2.9*)  TV=0.24.0; TA=2.9.0 ;;
+    2.8*)  TV=0.23.0; TA=2.8.0 ;;
+    2.7*)  TV=0.22.0; TA=2.7.0 ;;
+    2.6*)  TV=0.21.0; TA=2.6.0 ;;
+    2.5*)  TV=0.20.0; TA=2.5.0 ;;
+    *)     echo "[WARN] 无法识别 TORCH_VERSION=$TORCH_VERSION 对应的 torchvision/torchaudio 版本，"
+           echo "       请显式设置 TORCHVISION_VERSION / TORCHAUDIO_VERSION，否则可能拉取不匹配版本。"
+           TV=""; TA="" ;;
+  esac
+  [ -z "$TORCHVISION_VERSION" ] && TORCHVISION_VERSION="$TV"
+  [ -z "$TORCHAUDIO_VERSION" ] && TORCHAUDIO_VERSION="$TA"
+fi
 MIN_DISK_GB=15
 VENV="$PROJECT_ROOT/backend/.venv"
 PY="$VENV/bin/python"
@@ -198,27 +227,41 @@ fi
 # ============================================================
 echo "==> [5/9] 安装训练/推理引擎（MS-Swift + vLLM）"
 if [ "$HAS_GPU" -eq 1 ]; then
-  echo "    检测到 GPU：安装 torch ${TORCH_VERSION}（${CUDA_VERSION}）+ ms-swift + vllm"
-  echo "    [提示] CUDA ${CUDA_VERSION} 需要 NVIDIA 驱动 >= 570；驱动较旧时请改用"
-  echo "           CUDA_VERSION=cu124 TORCH_VERSION=2.9.0 重跑本脚本"
-  "$PIP" install --no-cache-dir "torch==${TORCH_VERSION}" torchvision torchaudio \
-      --index-url "https://download.pytorch.org/whl/${CUDA_VERSION}"
+  echo "    检测到 GPU：安装 torch ${TORCH_VERSION}（${CUDA_VERSION}）+ ms-swift + vllm==${VLLM_VERSION}"
+  echo "    [提示] cu128（CUDA 12.8）需 NVIDIA 驱动 >= 570；"
+  echo "           若驱动更旧，改用 CUDA_VERSION=cu124 TORCH_VERSION=2.9.0 VLLM_VERSION=0.14.0 等"
   TORCH_BEFORE="$("$PY" -c 'import torch;print(torch.__version__)' 2>/dev/null || echo '?')"
   echo "    安装前 torch: ${TORCH_BEFORE}"
+  # 已安装且版本/构建符合目标（如 2.10.0+cu128 命中 *2.10.0* 且 *+cu128*）时跳过强制重装，
+  # 避免重跑脚本时 torchvision/torchaudio 未锁版本把 torch 再次拉成不匹配构建。
+  TORCH_TARGET_FIRST="$(echo "$TORCH_VERSION" | cut -d. -f1-2)"
+  TORCH_ALREADY_OK=""
+  if [ "$TORCH_BEFORE" != "?" ]; then
+    case "$TORCH_BEFORE" in
+      ${TORCH_TARGET_FIRST}*+${CUDA_VERSION}*)
+        echo "    已安装匹配的 torch（${TORCH_BEFORE}），跳过 torch/torchvision/torchaudio 重装"
+        TORCH_ALREADY_OK=1
+        ;;
+    esac
+  fi
+  if [ -z "$TORCH_ALREADY_OK" ]; then
+    "$PIP" install --no-cache-dir "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" "torchaudio==${TORCHAUDIO_VERSION}" \
+        --index-url "https://download.pytorch.org/whl/${CUDA_VERSION}"
+  fi
   if [ -n "$PIP_INDEX_URL" ]; then
-    "$PIP" install --no-cache-dir ms-swift vllm --index-url "$PIP_INDEX_URL" || {
+    "$PIP" install --no-cache-dir ms-swift "vllm==${VLLM_VERSION}" \
+        --extra-index-url "https://download.pytorch.org/whl/${CUDA_VERSION}" \
+        --index-url "$PIP_INDEX_URL" || {
       echo "    [WARN] 引擎安装未完全成功；TRAIN_EXECUTION_MODE=auto 会自动降级 mock"
     }
   else
-    "$PIP" install --no-cache-dir ms-swift vllm || {
+    "$PIP" install --no-cache-dir ms-swift "vllm==${VLLM_VERSION}" \
+        --extra-index-url "https://download.pytorch.org/whl/${CUDA_VERSION}" || {
       echo "    [WARN] 引擎安装未完全成功；TRAIN_EXECUTION_MODE=auto 会自动降级 mock"
     }
   fi
-  # torch 防降级：vLLM / ms-swift 的依赖解析可能重装或降级 torch。
-  # 注意：新版 vLLM（0.11.x）会按自身依赖把 torch 锁定到特定版本（如 2.8.0），
-  #       此时强行恢复目标版本反而会导致 vLLM import 失败。
-  # 因此：只要新版本仍是 ${CUDA_VERSION} 构建就与当前 CUDA 兼容，直接保留；
-  #       仅当 torch 被换成非 ${CUDA_VERSION} 构建（如 +cpu）时才从 ${CUDA_VERSION} 源恢复。
+  # torch 防降级：vLLM 按自身依赖精确锁定 torch 版本（如 vllm 0.19.0 锁 torch==2.10.0），
+  # 正常情况下安装后 torch 版本应不变。若因依赖冲突被换成非目标 CUDA 构建才需恢复。
   TORCH_AFTER="$("$PY" -c 'import torch;print(torch.__version__)' 2>/dev/null || echo '?')"
   echo "    安装后 torch: ${TORCH_AFTER}"
   if [ "$TORCH_BEFORE" != "?" ] && [ "$TORCH_AFTER" != "?" ] && [ "$TORCH_BEFORE" != "$TORCH_AFTER" ]; then
@@ -229,15 +272,25 @@ if [ "$HAS_GPU" -eq 1 ]; then
         echo "           （vLLM 等引擎按自身依赖锁定 torch 版本，强改会破坏引擎）。"
         ;;
       *)
+        # 非目标 CUDA 构建（如 +cpu 或 cu130 默认构建）。恢复 torch 时须把配套的
+        # torchvision/torchaudio 一并锁回，否则它们会再次把 torch 拉成不匹配版本。
         echo "    [ERROR] torch 被改为 ${TORCH_AFTER}（非 ${CUDA_VERSION} 构建），尝试从 ${CUDA_VERSION} 源恢复 ${TORCH_BEFORE}..."
-        if "$PIP" install --no-cache-dir "torch==${TORCH_BEFORE}" --index-url "https://download.pytorch.org/whl/${CUDA_VERSION}"; then
+        if "$PIP" install --no-cache-dir "torch==${TORCH_VERSION}" \
+              "torchvision==${TORCHVISION_VERSION}" "torchaudio==${TORCHAUDIO_VERSION}" \
+              --index-url "https://download.pytorch.org/whl/${CUDA_VERSION}"; then
           TORCH_RESTORED="$("$PY" -c 'import torch;print(torch.__version__)' 2>/dev/null || echo '?')"
-          if [ "$TORCH_RESTORED" = "$TORCH_BEFORE" ]; then
-            echo "    torch 已恢复为 ${TORCH_BEFORE}"
-          else
-            echo "    [ERROR] torch 恢复失败（当前 ${TORCH_RESTORED}）。请重跑本脚本。"
-            exit 1
-          fi
+          case "$TORCH_RESTORED" in
+            ${TORCH_TARGET_FIRST}*+${CUDA_VERSION}*)
+              echo "    torch 已恢复为 ${TORCH_RESTORED}"
+              ;;
+            *)
+              echo "    [ERROR] torch 恢复失败（当前 ${TORCH_RESTORED}）。"
+              echo "           这可能因 vLLM 依赖锁定 torch 版本与目标不一致所致。"
+              echo "           vLLM 版本与 torch 的对应关系："
+              echo "             vllm 0.17~0.19 → torch==2.10.0  |  vllm 0.20+ → torch==2.11.0"
+              echo "           请确保 VLLM_VERSION 与 TORCH_VERSION 匹配后重跑。"
+              ;;
+          esac
         else
           echo "    [ERROR] torch 恢复失败。请重跑本脚本。"
           exit 1
@@ -309,7 +362,7 @@ echo "==> 生成演示数据集（SFT / 偏好 / 预训练文本，供训练向�
 if "$PY" deploy/common/seed_demo_data.py --root backend/workspace --samples 200; then
   echo "    演示数据集已生成（backend/workspace/datasets/），后端启动时自动录入数据集管理"
 else
-  echo "    [WARN] 演示数据集生成失败（网络或 modelscope 问题），可稍后手动执行："
+  echo "    [WARN] 演示数据集生成失败，可稍后手动执行："
   echo "           $PY deploy/common/seed_demo_data.py --root backend/workspace"
 fi
 
