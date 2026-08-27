@@ -251,13 +251,23 @@ class SwiftEngineAdapter:
 
     @classmethod
     def _resolve_flag(cls, flag: str, subcommand: str = "pt") -> str:
-        """把平台默认 CLI flag 适配到指定 swift 子命令（版本改名 / 连字符形式）。"""
+        """把平台默认 CLI flag 适配到指定 swift 子命令（版本改名 / 连字符形式）。
+
+        优先级：
+        1. 原始 flag 在探测到的选项集里 → 原样返回；
+        2. 下划线→连字符形式命中 → 返回连字符形式；
+        3. 跨版本改名映射（renamed）命中探测到的选项集 → 返回改名后的 flag；
+        4. 探测失败或未命中任何已知选项 → 返回 renamed 映射中的首个候选（现代标准名），
+           而不是盲目透传原始 flag。因为 help 探测可能因版本输出格式差异而漏掉某些参数，
+           盲目透传一个已废弃的旧参数名（如 --lora_target_modules → --target_modules）
+           会让 swift argparse 报 remaining_argv 错误，导致训练无法启动。
+        """
         opts = cls._swift_help_opts(subcommand)
-        if not opts or flag in opts:
+        if opts and flag in opts:
             return flag
         # 下划线 → 连字符（如 --learning_rate → --learning-rate）
         hyphen = flag.replace("_", "-")
-        if hyphen in opts:
+        if opts and hyphen in opts:
             return hyphen
         # 基础参数跨版本改名映射（2.x/3.x/4.x 参数名差异，按探测到的选项集适配）
         renamed = {
@@ -266,7 +276,8 @@ class SwiftEngineAdapter:
             "--output_dir": ("--output-dir", "--output_dir"),
             "--tuner_type": ("--train_type", "--train-type", "--tuner-type"),
             "--train_type": ("--tuner_type", "--tuner-type", "--train-type"),
-            "--lora_target_modules": ("--target_modules", "--target-modules", "--lora-target-modules"),
+            # 新版（4.x）已把 --lora_target_modules 改名为 --target_modules；首个候选即当前标准名
+            "--lora_target_modules": ("--target_modules", "--lora-target-modules", "--target-modules"),
             "--target_modules": ("--lora_target_modules", "--lora-target-modules", "--target-modules"),
             "--rlhf_type": ("--rlhf-type",),
             "--quant_method": ("--quant-method",),
@@ -274,9 +285,15 @@ class SwiftEngineAdapter:
             "--calib_dataset": ("--calib-dataset", "--calib_dataset"),
             "--calib_samples": ("--calib-samples",),
         }
-        for cand in renamed.get(flag, ()):
-            if cand in opts:
-                return cand
+        candidates = renamed.get(flag, ())
+        if opts:
+            for cand in candidates:
+                if cand in opts:
+                    return cand
+        # 探测失败（opts 为空）或未命中任何已知选项：
+        # 对已知改名参数，回退到首个候选（现代标准名），避免透传已废弃的旧参数名。
+        if flag in renamed:
+            return renamed[flag][0]
         return flag
 
     @staticmethod

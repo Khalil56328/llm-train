@@ -29,6 +29,18 @@ if [ ! -x "$PY" ]; then
   echo "    [WARN] 未找到 backend/.venv，使用系统 python3（请先执行 deploy/ubuntu/init_env.sh）"
 fi
 
+# 把 venv/bin 加入 PATH：引擎（MS-Swift 的 swift CLI、vLLM 等）以 console_scripts
+# 形式安装在该目录，executor 通过 shutil.which("swift") 探测并用 PATH 定位子进程命令。
+# 若此处不加入 PATH，exec_mode() 在 auto 模式下会因找不到 swift 而降级为 mock，
+# 真实训练/推理也会因 subprocess 找不到命令而失败。
+VENV_BIN="$(dirname "$PY")"
+if [ -d "$VENV_BIN" ]; then
+  case ":$PATH:" in
+    *":$VENV_BIN:"*) : ;;
+    *) export PATH="$VENV_BIN:$PATH" ;;
+  esac
+fi
+
 WITH_WORKER=0
 PORT=8000
 BACKGROUND=0
@@ -43,12 +55,14 @@ for arg in "$@"; do
   esac
 done
 
-stop_api() {
-  if [ -f "$PROJECT_ROOT/backend/api.pid" ]; then
+stop_pidfile() {
+  # 通用停止：pid 文件存在且进程存活则优雅终止（最多 10s 后强杀），再清理 pid 文件
+  local pidfile="$1" label="$2"
+  if [ -f "$pidfile" ]; then
     local pid
-    pid="$(cat "$PROJECT_ROOT/backend/api.pid" 2>/dev/null || true)"
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      echo "==> 停止后台 API（PID $pid）"
+      echo "==> 停止 ${label}（PID $pid）"
       kill "$pid" 2>/dev/null || true
       for _ in $(seq 1 10); do
         kill -0 "$pid" 2>/dev/null || break
@@ -56,11 +70,30 @@ stop_api() {
       done
       kill -9 "$pid" 2>/dev/null || true
     else
-      echo "==> API 未在运行（PID 文件过期）"
+      echo "==> ${label} 未在运行（PID 文件过期）"
     fi
-    rm -f "$PROJECT_ROOT/backend/api.pid"
+    rm -f "$pidfile"
   else
-    echo "==> 未找到 backend/api.pid，跳过停止"
+    echo "==> 未找到 ${pidfile}，跳过停止 ${label}"
+  fi
+}
+
+stop_api() {
+  stop_pidfile "$PROJECT_ROOT/backend/api.pid" "后台 API"
+}
+
+stop_worker() {
+  # 1) 按 pid 文件停止（后台启动 worker 时记录）
+  stop_pidfile "$PROJECT_ROOT/backend/celery.pid" "Celery Worker"
+
+  # 2) 兜底：清理任何残留的 celery worker 进程（celery 是 prefork 多进程，
+  #    主进程 pid 文件记录的只是主进程，子进程需一并清掉；pid 文件缺失时
+  #    旧 worker 会残留并继续消费任务——它们加载的是旧代码，必须彻底清掉）。
+  #    按 celery 工作进程名匹配：-A app.tasks.worker 或 python -m celery
+  if command -v pkill >/dev/null 2>&1; then
+    if pkill -f "app\.tasks\.worker" >/dev/null 2>&1; then
+      echo "==> 已清理残留的 Celery Worker 进程（按模块名匹配）"
+    fi
   fi
 }
 
@@ -100,10 +133,12 @@ free_port() {
 
 if [ "$ACTION" = "stop" ]; then
   stop_api
+  stop_worker
   exit 0
 fi
 if [ "$ACTION" = "restart" ]; then
   stop_api
+  stop_worker
   sleep 1
 fi
 
@@ -124,9 +159,11 @@ fi
 
 # 可选：Celery Worker（需要 Redis）
 if [ "$WITH_WORKER" -eq 1 ]; then
+  # 启动前先清掉旧 worker，避免残留进程（旧代码）继续消费任务导致新代码不生效
+  stop_worker
   echo "==> 启动 Celery Worker"
   (cd backend && nohup "$PY" -m celery -A app.tasks.worker:celery_app worker --loglevel=info \
-      > "$PROJECT_ROOT/backend/celery.log" 2>&1 &)
+      > "$PROJECT_ROOT/backend/celery.log" 2>&1 & echo $! > "$PROJECT_ROOT/backend/celery.pid")
   echo "    Worker 日志：backend/celery.log"
 fi
 

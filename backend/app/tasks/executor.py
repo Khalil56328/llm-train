@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.database import AsyncSessionLocal
+from app.core.database import AsyncSessionLocal, engine
 from app.engine.swift.adapter import SwiftEngineAdapter
 from app.models.dataset import Dataset
 from app.models.deployment import Deployment, DeployInstance
@@ -79,6 +79,28 @@ def exec_mode() -> str:
     if mode == "auto":
         return "real" if shutil.which("swift") and _gpu_available() else "mock"
     return "real" if mode == "real" else "mock"
+
+
+async def _dispose_engine_on_loop_switch() -> None:
+    """任务入口处清理 async 引擎连接池，规避跨事件循环复用导致的崩溃。
+
+    背景：SQLAlchemy async 引擎（asyncmy）的连接在创建时绑定到当时的事件循环，
+    该绑定无法跨循环复用。而在以下场景连接会绑定到「非当前执行循环」：
+      1. Celery prefork 模式：fork 出的 worker 子进程会继承父进程已绑定到
+         父进程循环的连接池连接；
+      2. Celery worker 用 asyncio.run() 每个任务新建循环：连接绑定到已关闭的旧循环；
+      3. 跨线程/跨循环调度（API 后台任务与请求交替）。
+    复用这些连接会抛 "got Future <Future pending> attached to a different loop"。
+
+    因此在每个任务执行入口（进入 AsyncSessionLocal 之前）主动 dispose 连接池，
+    强制后续连接在「当前事件循环」中按需重建，保证循环绑定一致。
+    dispose 只会丢弃空闲连接，连接池会自动惰性重建，不影响功能与性能。
+    """
+    try:
+        await engine.dispose()
+    except Exception:  # noqa: BLE001
+        # dispose 失败（如引擎未初始化 / 循环异常）不阻断任务，连接池会自行恢复
+        pass
 
 
 async def resolve_operator_version(
@@ -464,6 +486,7 @@ async def _create_output_model(session, task: TrainTask, output_dir: str) -> str
 
 async def run_training(task_id: str) -> str:
     """执行训练任务（Celery 与本地调度共用入口）"""
+    await _dispose_engine_on_loop_switch()
     async with AsyncSessionLocal() as session:
         writer = TaskLogWriter(session, task_id)
         task = None
@@ -845,6 +868,7 @@ async def stop_inference_service(deploy_id: str) -> str:
 
 async def run_inference(deploy_id: str) -> str:
     """启动推理服务（Celery 与本地调度共用入口）"""
+    await _dispose_engine_on_loop_switch()
     async with AsyncSessionLocal() as session:
         dep = None
         try:
@@ -974,6 +998,7 @@ def _evaluation_dims(scenes: Any) -> List[str]:
 
 async def run_evaluation(eval_id: str) -> str:
     """执行评测任务并生成报告文件（Celery 与本地调度共用入口）"""
+    await _dispose_engine_on_loop_switch()
     async with AsyncSessionLocal() as session:
         e = None
         try:
