@@ -30,16 +30,62 @@
       :loading="loading"
       :total="total"
       :show-index="true"
+      row-key="id"
       v-model:page="pageIndex"
       v-model:page-size="pageSize"
       @page-change="fetchData"
       @size-change="fetchData"
+      @expand-change="handleExpandChange"
     >
+      <template #expand="{ row }">
+        <div class="version-section">
+          <el-table :data="versionMap[(row as Dataset).id] || []" size="small" border>
+            <el-table-column prop="version" label="版本号" width="110">
+              <template #default="{ row: v }">
+                <span>{{ v.version }}</span>
+                <el-tag v-if="v.isDefault" type="success" size="small" style="margin-left: 6px">默认</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="description" label="版本描述" min-width="160" show-overflow-tooltip>
+              <template #default="{ row: v }">{{ v.description || '-' }}</template>
+            </el-table-column>
+            <el-table-column prop="fileCount" label="文件数" width="90" />
+            <el-table-column prop="size" label="文件大小" width="110">
+              <template #default="{ row: v }">{{ formatFileSize(v.size || 0) }}</template>
+            </el-table-column>
+            <el-table-column prop="sampleCount" label="样本数" width="110" />
+            <el-table-column prop="createdBy" label="创建人" width="110">
+              <template #default="{ row: v }">{{ v.createdBy || '-' }}</template>
+            </el-table-column>
+            <el-table-column prop="createdAt" label="创建时间" width="170">
+              <template #default="{ row: v }">{{ formatDate(v.createdAt) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="220" fixed="right">
+              <template #default="{ row: v }">
+                <el-button v-if="!v.isDefault" type="primary" link size="small" @click="setDefault(row as Dataset, v as DatasetVersion)">设为默认</el-button>
+                <el-button type="primary" link size="small" @click="goFiles(row as Dataset, v as DatasetVersion)">文件列表</el-button>
+                <el-button type="primary" link size="small" @click="openVersionEdit(row as Dataset, v as DatasetVersion)">修改</el-button>
+                <el-button
+                  v-if="(versionMap[(row as Dataset).id] || []).length > 1"
+                  type="danger"
+                  link
+                  size="small"
+                  @click="deleteVersion(row as Dataset, v as DatasetVersion)"
+                >删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </template>
       <template #name="{ row }">
         <a class="link" @click="goFiles(row as Dataset)">{{ (row as Dataset).name }}</a>
       </template>
       <template #category="{ row }">{{ getCategoryLabel((row as Dataset).category) }}</template>
       <template #dataType="{ row }">{{ getDataTypeLabel((row as Dataset).dataType) }}</template>
+      <template #versions="{ row }">
+        <el-tag v-if="(row as Dataset).defaultVersion" type="primary" size="small">{{ (row as Dataset).defaultVersion }}</el-tag>
+        <span class="version-count">共 {{ (row as Dataset).versionCount ?? 1 }} 个版本</span>
+      </template>
       <template #actions="{ row }">
         <el-button type="primary" link size="small" @click="openDetailDialog(row as Dataset)">详情</el-button>
         <el-dropdown trigger="click">
@@ -49,6 +95,7 @@
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item @click="goFiles(row as Dataset)">文件列表</el-dropdown-item>
+              <el-dropdown-item @click="openVersionCreate(row as Dataset)">新增版本</el-dropdown-item>
               <el-dropdown-item @click="openEditDialog(row as Dataset)">编辑</el-dropdown-item>
               <el-dropdown-item @click="deleteDataset(row as Dataset)">删除</el-dropdown-item>
             </el-dropdown-menu>
@@ -102,6 +149,8 @@
           <el-descriptions-item label="是否公开">{{ detail.isPublic ? '是' : '否' }}</el-descriptions-item>
           <el-descriptions-item label="文件数">{{ detail.fileCount ?? 0 }}</el-descriptions-item>
           <el-descriptions-item label="文件大小">{{ formatFileSize(detail.size || 0) }}</el-descriptions-item>
+          <el-descriptions-item label="默认版本">{{ detail.defaultVersion || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="版本数">{{ detail.versionCount ?? 1 }}</el-descriptions-item>
           <el-descriptions-item label="创建人">{{ detail.ownerName || '-' }}</el-descriptions-item>
           <el-descriptions-item label="归属用户">{{ detail.ownerName || 'AI租户' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间" :span="2">{{ formatDate(detail.createdAt) }}</el-descriptions-item>
@@ -110,6 +159,34 @@
       </div>
       <template #footer>
         <el-button type="primary" @click="detailVisible = false">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 新增/编辑数据集版本 -->
+    <el-dialog
+      v-model="versionDialogVisible"
+      :title="versionEditingId ? '修改版本' : '新增版本'"
+      width="560px"
+      class="custom-modal"
+      :close-on-click-modal="false"
+    >
+      <el-form :model="versionForm" label-width="100px">
+        <el-form-item label="版本号">
+          <el-input
+            v-model="versionForm.version"
+            :placeholder="versionEditingId ? '请输入版本号' : '留空自动生成（如 v2）'"
+          />
+        </el-form-item>
+        <el-form-item label="版本描述">
+          <el-input v-model="versionForm.description" type="textarea" :rows="3" placeholder="请输入版本描述" />
+        </el-form-item>
+        <el-form-item v-if="!versionEditingId" label="设为默认">
+          <el-switch v-model="versionForm.isDefault" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="versionDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleVersionSave">提交</el-button>
       </template>
     </el-dialog>
   </div>
@@ -130,8 +207,13 @@ import {
   updateDataset,
   deleteDataset as deleteDatasetApi,
   getDatasetDetail,
+  getDatasetVersions,
+  createDatasetVersion,
+  updateDatasetVersion,
+  setDefaultDatasetVersion,
+  deleteDatasetVersion,
 } from '@/api/dataset'
-import type { Dataset } from '@/types'
+import type { Dataset, DatasetVersion } from '@/types'
 
 const router = useRouter()
 
@@ -165,6 +247,17 @@ const editingId = ref<string | null>(null)
 const detailVisible = ref(false)
 const detail = ref<Dataset | null>(null)
 
+// ========== 版本管理 ==========
+const versionMap = ref<Record<string, DatasetVersion[]>>({})
+const versionDialogVisible = ref(false)
+const versionEditingId = ref<string | null>(null)
+const versionDatasetId = ref('')
+const versionForm = reactive({
+  version: '',
+  description: '',
+  isDefault: false,
+})
+
 const formData = reactive({
   name: '',
   category: '文本生成',
@@ -177,6 +270,7 @@ const columns: ColumnConfig[] = [
   { prop: 'name', label: '数据集名称', minWidth: 180, slot: 'name' },
   { prop: 'category', label: '数据集分类', minWidth: 120, slot: 'category' },
   { prop: 'dataType', label: '数据类型', minWidth: 150, slot: 'dataType' },
+  { prop: 'versions', label: '版本', width: 150, slot: 'versions' },
   {
     prop: 'isPublic',
     label: '是否公开',
@@ -303,8 +397,95 @@ async function deleteDataset(row: Dataset) {
   }
 }
 
-function goFiles(row: Dataset) {
-  router.push({ name: 'data-training-files', params: { id: row.id } })
+function goFiles(row: Dataset, version?: DatasetVersion) {
+  router.push({
+    name: 'data-training-files',
+    params: { id: row.id },
+    query: version ? { versionId: version.id } : undefined,
+  })
+}
+
+// ========== 版本管理 ==========
+async function loadVersions(datasetId: string) {
+  try {
+    const list = await getDatasetVersions(datasetId)
+    versionMap.value[datasetId] = list
+  } catch {
+    /* noop */
+  }
+}
+
+async function handleExpandChange({ row }: { row: Record<string, unknown> }) {
+  const ds = row as unknown as Dataset
+  if (ds.id && !versionMap.value[ds.id]) {
+    await loadVersions(ds.id)
+  }
+}
+
+function openVersionCreate(row: Dataset) {
+  versionDatasetId.value = row.id
+  versionEditingId.value = null
+  Object.assign(versionForm, { version: '', description: '', isDefault: false })
+  versionDialogVisible.value = true
+}
+
+function openVersionEdit(row: Dataset, v: DatasetVersion) {
+  versionDatasetId.value = row.id
+  versionEditingId.value = v.id
+  Object.assign(versionForm, { version: v.version, description: v.description || '', isDefault: v.isDefault })
+  versionDialogVisible.value = true
+}
+
+async function handleVersionSave() {
+  if (!versionDatasetId.value) return
+  try {
+    if (versionEditingId.value) {
+      await updateDatasetVersion(versionDatasetId.value, versionEditingId.value, {
+        version: versionForm.version || undefined,
+        description: versionForm.description,
+      })
+      ElMessage.success('版本修改成功')
+    } else {
+      await createDatasetVersion(versionDatasetId.value, {
+        version: versionForm.version || undefined,
+        description: versionForm.description,
+        isDefault: versionForm.isDefault,
+      })
+      ElMessage.success('版本创建成功')
+    }
+    versionDialogVisible.value = false
+    await loadVersions(versionDatasetId.value)
+    fetchData()
+  } catch {
+    /* noop */
+  }
+}
+
+async function setDefault(row: Dataset, v: DatasetVersion) {
+  try {
+    await setDefaultDatasetVersion(row.id, v.id)
+    ElMessage.success(`已将 ${v.version} 设为默认版本`)
+    await loadVersions(row.id)
+    fetchData()
+  } catch {
+    /* noop */
+  }
+}
+
+async function deleteVersion(row: Dataset, v: DatasetVersion) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除版本「${v.version}」吗？该版本下的文件将一并删除。`,
+      '提示',
+      { type: 'warning' },
+    )
+    await deleteDatasetVersion(row.id, v.id)
+    ElMessage.success('版本删除成功')
+    await loadVersions(row.id)
+    fetchData()
+  } catch {
+    /* noop */
+  }
 }
 
 function getCategoryLabel(v: string) {
@@ -329,5 +510,31 @@ onMounted(fetchData)
 }
 .detail {
   padding: 8px 12px;
+}
+.version-count {
+  margin-left: 8px;
+  color: $text-secondary;
+  font-size: 12px;
+}
+.version-section {
+  padding: 8px 12px 16px;
+  .version-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    .version-title {
+      font-weight: 600;
+      font-size: 13px;
+      &::before {
+        content: '';
+        display: inline-block;
+        width: 3px;
+        height: 12px;
+        margin-right: 6px;
+        background: $color-primary;
+      }
+    }
+  }
 }
 </style>

@@ -33,7 +33,8 @@ class DatasetUpdate(BaseModel):
 
 class DatasetVersionCreate(BaseModel):
     """创建数据集版本请求体"""
-    version: str = Field("v1", max_length=50)
+    version: Optional[str] = Field(None, max_length=50, description="版本号，不传则自动生成(vN)")
+    description: Optional[str] = Field(None, max_length=500)
     storage_path: Optional[str] = Field(None, max_length=1000)
     is_default: bool = False
 
@@ -41,6 +42,7 @@ class DatasetVersionCreate(BaseModel):
 class DatasetVersionUpdate(BaseModel):
     """更新数据集版本请求体"""
     version: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = Field(None, max_length=500)
     storage_path: Optional[str] = Field(None, max_length=1000)
     is_default: Optional[bool] = None
     status: Optional[str] = None
@@ -56,6 +58,7 @@ class DatasetFileCreate(BaseModel):
     batch_id: Optional[str] = Field(None, max_length=36, description="采集批次ID")
     sample_count: int = Field(0, ge=0, description="样本行数")
     error_message: Optional[str] = Field(None, max_length=500, description="失败原因")
+    version_id: Optional[str] = Field(None, max_length=36, description="目标版本ID，缺省挂到默认版本")
 
 
 class DatasetCompareReq(BaseModel):

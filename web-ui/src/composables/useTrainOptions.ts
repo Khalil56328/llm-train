@@ -5,7 +5,7 @@ import { getModelList, getModelVersions } from '@/api/model'
 import { getDatasetList, getDatasetVersions } from '@/api/dataset'
 import { fetchOperatorList, fetchOperatorVersions } from '@/api/operator'
 import type { HierarchicalItem } from '@/components/common/HierarchicalSelect.vue'
-import type { Dataset, Operator, OperatorVersion, Model, ModelVersion } from '@/types'
+import type { Dataset, DatasetVersion, Operator, OperatorVersion, Model, ModelVersion } from '@/types'
 
 export type ScopeType = 'public' | 'mine'
 
@@ -125,8 +125,8 @@ export function useTrainOptions() {
         try {
           const versions = await getDatasetVersions(item.id)
           map[item.id] =
-            versions.map((v: { version: string; storagePath: string }) => ({
-              id: v.version,
+            versions.map((v: DatasetVersion) => ({
+              id: v.id || v.version,
               name: v.version,
               // 数据集版本无公开/私有标识，默认两个分组都展示
               scope: ['public', 'mine'],

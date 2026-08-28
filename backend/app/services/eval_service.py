@@ -70,6 +70,7 @@ class EvalService:
             is_baseline=data.get("isBaseline", False),
             dataset_id=data.get("datasetId", ""),
             dataset_name=data.get("datasetName"),
+            dataset_version=data.get("datasetVersion"),
             deployment_id=data.get("deploymentId", ""),
             deployment_name=data.get("deploymentName"),
             scenes=data.get("scenes", []),
@@ -124,7 +125,8 @@ class EvalService:
             return None
         field_map = {
             "isBaseline": "is_baseline", "datasetId": "dataset_id",
-            "datasetName": "dataset_name", "deploymentId": "deployment_id",
+            "datasetName": "dataset_name", "datasetVersion": "dataset_version",
+            "deploymentId": "deployment_id",
             "deploymentName": "deployment_name", "reportUrl": "report_url",
             "createdBy": "created_by", "errorMessage": "error_message",
             "evalType": "eval_type", "ratingScale": "rating_scale",
@@ -274,6 +276,7 @@ def _eval_to_dict(e: EvaluationTask) -> Dict:
         "isBaseline": e.is_baseline,
         "datasetId": e.dataset_id,
         "datasetName": e.dataset_name,
+        "datasetVersion": e.dataset_version,
         "deploymentId": e.deployment_id,
         "deploymentName": e.deployment_name,
         "scenes": e.scenes,

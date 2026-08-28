@@ -41,6 +41,16 @@
                 </el-option-group>
               </el-select>
             </el-form-item>
+            <el-form-item v-if="datasetVersionList.length" label="数据集版本" prop="datasetVersion">
+              <el-select v-model="form.datasetVersion" placeholder="请选择数据集版本" filterable style="width: 100%">
+                <el-option
+                  v-for="v in datasetVersionList"
+                  :key="v.id"
+                  :label="v.isDefault ? `${v.version}（默认）` : v.version"
+                  :value="v.id"
+                />
+              </el-select>
+            </el-form-item>
             <el-form-item label="模型服务" prop="deploymentId">
               <el-select v-model="form.deploymentId" placeholder="请选择模型服务" filterable style="width: 100%"
                 @change="onDeploymentChange">
@@ -161,9 +171,9 @@ import { ElMessage } from 'element-plus'
 import { Plus, Delete } from '@element-plus/icons-vue'
 import PageHeaderCard from '@/components/common/PageHeaderCard.vue'
 import { createEvaluation } from '@/api/service'
-import { getDatasetList, getPlazaDatasets } from '@/api/dataset'
+import { getDatasetList, getPlazaDatasets, getDatasetVersions } from '@/api/dataset'
 import { getDeploymentList } from '@/api/service'
-import type { EvalScene, ManualEvalScene } from '@/types'
+import type { EvalScene, ManualEvalScene, DatasetVersion } from '@/types'
 import { EvalSceneMap, EvalSceneIconMap, ManualEvalSceneMap, ManualEvalSceneIconMap } from '@/types'
 
 const router = useRouter()
@@ -178,6 +188,7 @@ const form = ref({
   isBaseline: false,
   datasetId: '',
   datasetName: '',
+  datasetVersion: '',
   deploymentId: '',
   deploymentName: '',
   scenes: [] as string[],
@@ -211,9 +222,23 @@ function toggleScene(key: string) {
   else form.value.scenes.push(key)
 }
 
-function onDatasetChange(val: string) {
+const datasetVersionList = ref<DatasetVersion[]>([])
+
+async function onDatasetChange(val: string) {
   const ds = [...datasetList.value, ...plazaDatasetList.value].find((d: any) => d.id === val)
   if (ds) form.value.datasetName = ds.name
+  // 加载所选数据集的版本，默认选中默认版本
+  datasetVersionList.value = []
+  form.value.datasetVersion = ''
+  if (!val) return
+  try {
+    const versions = await getDatasetVersions(val)
+    datasetVersionList.value = versions
+    const def = versions.find((v) => v.isDefault) || versions[0]
+    form.value.datasetVersion = def?.id || ''
+  } catch {
+    datasetVersionList.value = []
+  }
 }
 
 function onDeploymentChange(val: string) {

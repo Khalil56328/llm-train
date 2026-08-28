@@ -30,7 +30,7 @@ from app.models.model import ModelFile
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, engine
 from app.engine.swift.adapter import SwiftEngineAdapter
-from app.models.dataset import Dataset
+from app.models.dataset import Dataset, DatasetVersion
 from app.models.deployment import Deployment, DeployInstance
 from app.models.evaluation import EvaluationTask
 from app.models.model import Model, ModelVersion
@@ -957,9 +957,22 @@ async def run_training(task_id: str) -> str:
                     base_model = m.storage_path
             dataset_ref = task.dataset_id or ""
             if task.dataset_id:
+                # 优先按任务所选版本解析版本目录，无版本或未命中时回退数据集主表路径
+                version_ref = None
+                if task.dataset_version:
+                    vr = await session.execute(
+                        select(DatasetVersion).where(
+                            DatasetVersion.dataset_id == task.dataset_id,
+                            (DatasetVersion.version == task.dataset_version)
+                            | (DatasetVersion.id == task.dataset_version),
+                        )
+                    )
+                    version_ref = vr.scalar_one_or_none()
                 dr = await session.execute(select(Dataset).where(Dataset.id == task.dataset_id))
                 ds = dr.scalar_one_or_none()
-                if ds and ds.storage_path:
+                if version_ref and version_ref.storage_path:
+                    dataset_ref = version_ref.storage_path
+                elif ds and ds.storage_path:
                     dataset_ref = ds.storage_path
 
             output_dir = str(storage_dir() / "models" / task_id)

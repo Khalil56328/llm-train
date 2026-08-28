@@ -100,6 +100,8 @@ const columns: ColumnConfig[] = [
   { prop: 'name', label: '评测名称', minWidth: 200 },
   { prop: 'status', label: '状态', width: 100, type: 'status' as const, statusMap: EvalStatusMap, statusColorMap: EvalStatusColorMap },
   { prop: 'datasetName', label: '数据集', minWidth: 160 },
+  { prop: 'datasetVersion', label: '数据集版本', minWidth: 110 },
+
   { prop: 'deploymentName', label: '模型服务', minWidth: 160 },
   { prop: 'scenes', label: '评测场景', minWidth: 180, slot: 'sceneSlot' },
   { prop: 'score', label: '评分', width: 80, align: 'center', slot: 'scoreSlot' },

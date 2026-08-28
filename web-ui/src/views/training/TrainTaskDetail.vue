@@ -53,6 +53,7 @@
             <div class="info-item"><span class="info-label">基础模型：</span>{{ task.baseModelName || '-' }}</div>
             <div class="info-item"><span class="info-label">基础模型版本：</span>{{ task.baseModelVersion || '-' }}</div>
             <div class="info-item"><span class="info-label">数据集：</span>{{ task.datasetName || task.datasetId || '-' }}</div>
+            <div class="info-item"><span class="info-label">数据集版本：</span>{{ task.datasetVersion || '-' }}</div>
             <div class="info-item"><span class="info-label">验证数据集：</span>{{ task.valDatasetId || '-' }}</div>
             <div class="info-item"><span class="info-label">SFT模型：</span>{{ task.sftModelId || '-' }}</div>
             <div class="info-item"><span class="info-label">教师模型：</span>{{ task.teacherModelId || '-' }}</div>
@@ -157,6 +158,7 @@ const task = reactive({
   baseModelVersion: '',
   datasetId: '',
   datasetName: '',
+  datasetVersion: '',
   framework: '',
   valDatasetId: '',
   sftModelId: '',
@@ -259,6 +261,7 @@ async function loadDetail() {
       baseModelVersion: data.baseModelVersion || '',
       datasetId: data.datasetId || '',
       datasetName: data.datasetName || '',
+      datasetVersion: data.datasetVersion || '',
       framework: data.framework || '',
       valDatasetId: data.valDatasetId || '',
       sftModelId: data.sftModelId || '',

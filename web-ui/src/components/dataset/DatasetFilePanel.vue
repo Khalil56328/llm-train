@@ -4,6 +4,25 @@
       <div class="left">
         <span class="info-item">目录数据集<span class="dataset-name">{{ dataset.name }}</span></span>
         <span class="separator">|</span>
+        <span class="version-filter">
+          <span class="version-label">版本</span>
+          <el-select
+            v-model="currentVersionId"
+            placeholder="全部版本"
+            clearable
+            size="default"
+            style="width: 180px"
+            @change="handleVersionChange"
+          >
+            <el-option
+              v-for="v in versions"
+              :key="v.id"
+              :label="v.isDefault ? `${v.version}（默认）` : v.version"
+              :value="v.id"
+            />
+          </el-select>
+        </span>
+        <span class="separator">|</span>
         <span class="stat">文件数量{{ stats.fileCount }},</span>
         <span class="stat success">成功{{ stats.success }},</span>
         <span class="stat danger">失败{{ stats.failed }},</span>
@@ -93,6 +112,17 @@
     <!-- 数据添加弹窗 -->
     <el-dialog v-model="uploadDialog" title="添加数据文件" width="560px" class="custom-modal">
       <el-form label-width="100px">
+        <el-form-item label="上传版本">
+          <el-select v-model="uploadVersionId" style="width: 100%" :disabled="uploading">
+            <el-option
+              v-for="v in versions"
+              :key="v.id"
+              :label="v.isDefault ? `${v.version}（默认）` : v.version"
+              :value="v.id"
+            />
+          </el-select>
+          <div class="version-tip">文件将上传到所选版本，缺省为默认版本</div>
+        </el-form-item>
         <el-form-item label="数据来源">
           <el-select v-model="uploadSource" style="width: 100%">
             <el-option label="本地上传" value="local_upload" />
@@ -177,6 +207,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadUserFile } from 'element-plus'
 import { Search, Refresh, Plus, UploadFilled } from '@element-plus/icons-vue'
@@ -189,13 +220,15 @@ import {
   uploadDatasetFile,
   deleteDatasetFile,
   getCollectTasks,
+  getDatasetVersions,
   downloadDatasetFile,
   downloadTemplate,
   importFromModelscope,
 } from '@/api/dataset'
-import type { Dataset, DatasetFile, CollectTask, DatasetFileSource } from '@/types'
+import type { Dataset, DatasetFile, DatasetVersion, CollectTask, DatasetFileSource } from '@/types'
 
 const props = defineProps<{ datasetId: string }>()
+const route = useRoute()
 
 const dataset = ref<Dataset | null>(null)
 const files = ref<DatasetFile[]>([])
@@ -207,6 +240,10 @@ const pageSize = ref(10)
 const loading = ref(false)
 const filterStatus = ref('')
 const filterKeyword = ref('')
+
+// 版本维度
+const versions = ref<DatasetVersion[]>([])
+const currentVersionId = ref('')
 
 // 采集任务（按批次聚合）
 const collectTasks = ref<CollectTask[]>([])
@@ -224,6 +261,7 @@ interface UploadJob {
 const uploadDialog = ref(false)
 const uploadSource = ref<DatasetFileSource>('local_upload')
 const uploading = ref(false)
+const uploadVersionId = ref('')
 const uploadFileList = ref<UploadUserFile[]>([])
 const uploadJobs = ref<UploadJob[]>([])
 
@@ -294,15 +332,33 @@ async function fetchDataset() {
   dataset.value = await getDatasetDetail(props.datasetId)
 }
 
+async function fetchVersions() {
+  versions.value = await getDatasetVersions(props.datasetId)
+  // 初始选中：路由指定版本 > 默认版本 > 全部
+  if (!currentVersionId.value) {
+    const qv = route.query.versionId
+    if (typeof qv === 'string' && versions.value.some((v) => v.id === qv)) {
+      currentVersionId.value = qv
+    } else {
+      const def = versions.value.find((v) => v.isDefault)
+      currentVersionId.value = def?.id || ''
+    }
+  }
+}
+
 async function fetchStats() {
-  const s = await getDatasetFileStats(props.datasetId)
+  const s = await getDatasetFileStats(props.datasetId, {
+    versionId: currentVersionId.value || undefined,
+  })
   Object.assign(stats, s)
 }
 
 async function fetchCollectTasks() {
   tasksLoading.value = true
   try {
-    collectTasks.value = await getCollectTasks(props.datasetId)
+    collectTasks.value = await getCollectTasks(props.datasetId, {
+      versionId: currentVersionId.value || undefined,
+    })
   } finally {
     tasksLoading.value = false
   }
@@ -316,12 +372,20 @@ async function fetchFiles() {
       pageSize: pageSize.value,
       keyword: filterKeyword.value || undefined,
       status: filterStatus.value || undefined,
+      versionId: currentVersionId.value || undefined,
     })
     files.value = data.list
     total.value = data.total
   } finally {
     loading.value = false
   }
+}
+
+function handleVersionChange() {
+  pageIndex.value = 1
+  fetchFiles()
+  fetchStats()
+  fetchCollectTasks()
 }
 
 function handleReset() {
@@ -339,6 +403,8 @@ function openUploadDialog() {
   modelscopeSubPath.value = ''
   modelscopeExample.value = ''
   uploadSource.value = 'local_upload'
+  // 上传目标版本：默认当前筛选版本，未筛选则为默认版本
+  uploadVersionId.value = currentVersionId.value || versions.value.find((v) => v.isDefault)?.id || ''
   uploadDialog.value = true
 }
 
@@ -361,6 +427,7 @@ async function uploadOne(job: UploadJob, batchId: string) {
   form.append('file', job.raw, job.name)
   form.append('source', uploadSource.value)
   form.append('batch_id', batchId)
+  if (uploadVersionId.value) form.append('version_id', uploadVersionId.value)
   await uploadDatasetFile(props.datasetId, form, (p) => {
     job.percent = p
   })
@@ -383,6 +450,7 @@ async function submitModelscope() {
     form.append('sub_dir_path', modelscopeSubPath.value.trim())
     form.append('source', 'modelscope')
     form.append('batch_id', `modelscope_${uidSeq}_${Math.random().toString(36).slice(2, 8)}`)
+    if (uploadVersionId.value) form.append('version_id', uploadVersionId.value)
     const res = await importFromModelscope(props.datasetId, form)
     const failed = (res.files || []).filter((f) => f.status === 'failed')
     if (!failed.length) {
@@ -511,6 +579,7 @@ async function deleteFile(row: DatasetFile) {
 
 onMounted(async () => {
   await fetchDataset()
+  await fetchVersions()
   await Promise.all([fetchFiles(), fetchStats(), fetchCollectTasks()])
 })
 </script>

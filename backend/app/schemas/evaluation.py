@@ -15,6 +15,7 @@ class EvaluationCreate(BaseModel):
     isBaseline: bool = False
     datasetId: str = Field(..., min_length=1, max_length=64)
     datasetName: Optional[str] = Field(None, max_length=200)
+    datasetVersion: Optional[str] = Field(None, max_length=50, description="数据集版本号")
     deploymentId: str = Field(..., min_length=1, max_length=64)
     deploymentName: Optional[str] = Field(None, max_length=200)
     scenes: List[str] = Field(default_factory=list)

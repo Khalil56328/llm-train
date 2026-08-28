@@ -34,6 +34,7 @@
           <div class="section-body">
             <el-descriptions :column="2" border size="small">
               <el-descriptions-item label="数据集">{{ detail.datasetName || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="数据集版本">{{ detail.datasetVersion || '-' }}</el-descriptions-item>
               <el-descriptions-item label="模型服务">{{ detail.deploymentName || '-' }}</el-descriptions-item>
             </el-descriptions>
           </div>

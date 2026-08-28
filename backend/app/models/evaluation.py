@@ -18,6 +18,7 @@ class EvaluationTask(Base):
     is_baseline = Column(Boolean, default=False, comment="是否基线评测")
     dataset_id = Column(String(36), nullable=False, comment="数据集ID")
     dataset_name = Column(String(200), comment="数据集名称")
+    dataset_version = Column(String(50), comment="数据集版本号")
     deployment_id = Column(String(36), nullable=False, comment="部署ID")
     deployment_name = Column(String(200), comment="部署名称")
     scenes = Column(JSON, default=[], comment="评测场景")          # ["code", "alignment", "agent", "safety", "reasoning"]

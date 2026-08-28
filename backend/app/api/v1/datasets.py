@@ -20,7 +20,13 @@ from app.core.response import success_response
 from app.core.storage import read_object, save_data, save_upload
 from app.services.dataset_format import csv_to_jsonl
 from app.services.dataset_service import DatasetService
-from app.schemas.dataset import DatasetCreate, DatasetUpdate, DatasetVersionCreate, DatasetFileCreate
+from app.schemas.dataset import (
+    DatasetCreate,
+    DatasetUpdate,
+    DatasetVersionCreate,
+    DatasetVersionUpdate,
+    DatasetFileCreate,
+)
 
 router = APIRouter()
 
@@ -201,6 +207,22 @@ async def list_versions(
     return success_response(result)
 
 
+@router.get("/{dataset_id}/versions/{version_id}")
+async def get_version(
+    dataset_id: str,
+    version_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    svc = DatasetService(db)
+    dataset = await _get_dataset_or_404(svc, dataset_id)
+    _ensure_readable(dataset, user)
+    result = await svc.get_version(dataset_id, version_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    return success_response(result)
+
+
 @router.post("/{dataset_id}/versions")
 async def create_version(
     dataset_id: str,
@@ -211,18 +233,67 @@ async def create_version(
     svc = DatasetService(db)
     dataset = await _get_dataset_or_404(svc, dataset_id)
     _ensure_owned(dataset, user)
-    result = await svc.create_version(dataset_id, data.model_dump())
+    try:
+        result = await svc.create_version(
+            dataset_id,
+            data.model_dump(),
+            created_by=user.get("nickname") or user.get("username"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return success_response(result)
 
 
-@router.delete("/versions/{version_id}")
-async def delete_version(
+@router.put("/{dataset_id}/versions/{version_id}")
+async def update_version(
+    dataset_id: str,
     version_id: str,
+    data: DatasetVersionUpdate,
     db: AsyncSession = Depends(get_db),
-    _user: dict = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
 ):
     svc = DatasetService(db)
-    ok = await svc.delete_version(version_id)
+    dataset = await _get_dataset_or_404(svc, dataset_id)
+    _ensure_owned(dataset, user)
+    try:
+        result = await svc.update_version(dataset_id, version_id, data.model_dump(exclude_unset=True))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not result:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    return success_response(result)
+
+
+@router.put("/{dataset_id}/versions/{version_id}/default")
+async def set_default_version(
+    dataset_id: str,
+    version_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    svc = DatasetService(db)
+    dataset = await _get_dataset_or_404(svc, dataset_id)
+    _ensure_owned(dataset, user)
+    result = await svc.set_default_version(dataset_id, version_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    return success_response(result)
+
+
+@router.delete("/{dataset_id}/versions/{version_id}")
+async def delete_version(
+    dataset_id: str,
+    version_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    svc = DatasetService(db)
+    dataset = await _get_dataset_or_404(svc, dataset_id)
+    _ensure_owned(dataset, user)
+    try:
+        ok = await svc.delete_version(dataset_id, version_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not ok:
         raise HTTPException(status_code=404, detail="版本不存在")
     return success_response({"message": "删除成功"})
@@ -236,6 +307,7 @@ async def list_files(
     page_size: int = Query(10, ge=1, le=100),
     keyword: str = Query(None),
     status: str = Query(None),
+    version_id: str = Query(None, description="按数据集版本过滤"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -248,6 +320,7 @@ async def list_files(
         page_size=page_size,
         keyword=keyword,
         status=status,
+        version_id=version_id,
     )
     return success_response(result)
 
@@ -255,19 +328,21 @@ async def list_files(
 @router.get("/{dataset_id}/files/stats")
 async def get_file_stats(
     dataset_id: str,
+    version_id: str = Query(None, description="按数据集版本过滤"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     svc = DatasetService(db)
     dataset = await _get_dataset_or_404(svc, dataset_id)
     _ensure_readable(dataset, user)
-    result = await svc.get_file_stats(dataset_id)
+    result = await svc.get_file_stats(dataset_id, version_id=version_id)
     return success_response(result)
 
 
 @router.get("/{dataset_id}/files/collect-tasks")
 async def list_collect_tasks(
     dataset_id: str,
+    version_id: str = Query(None, description="按数据集版本过滤"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -275,7 +350,7 @@ async def list_collect_tasks(
     svc = DatasetService(db)
     dataset = await _get_dataset_or_404(svc, dataset_id)
     _ensure_readable(dataset, user)
-    result = await svc.list_collect_tasks(dataset_id)
+    result = await svc.list_collect_tasks(dataset_id, version_id=version_id)
     return success_response(result)
 
 
@@ -299,6 +374,7 @@ async def upload_file(
     file: UploadFile = File(...),
     source: str = Form("local_upload"),
     batch_id: str = Form(None),
+    version_id: str = Form(None, description="目标版本ID，缺省上传到默认版本"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -306,6 +382,7 @@ async def upload_file(
 
     - source: 数据来源(采集方式)，如 local_upload / platform
     - batch_id: 采集批次 ID（一次上传的多个文件共享，用于采集任务聚合）
+    - version_id: 目标版本 ID，缺省上传到默认版本
     """
     svc = DatasetService(db)
     dataset = await _get_dataset_or_404(svc, dataset_id)
@@ -331,18 +408,22 @@ async def upload_file(
 
     storage_path = saved["storage_path"]
     sample_count = DatasetService.count_file_rows(storage_path, file_name)
-    result = await svc.create_file(
-        dataset_id,
-        {
-            "file_name": file_name,
-            "source": source,
-            "status": "success",
-            "size": saved["size"],
-            "storage_path": storage_path,
-            "batch_id": batch_id or _new_batch_id(),
-            "sample_count": sample_count,
-        },
-    )
+    try:
+        result = await svc.create_file(
+            dataset_id,
+            {
+                "file_name": file_name,
+                "source": source,
+                "status": "success",
+                "size": saved["size"],
+                "storage_path": storage_path,
+                "batch_id": batch_id or _new_batch_id(),
+                "sample_count": sample_count,
+                "version_id": version_id,
+            },
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return success_response({**result, "url": saved["url"]})
 
 
@@ -351,12 +432,14 @@ async def upload_files_batch(
     dataset_id: str,
     files: list[UploadFile] = File(...),
     source: str = Form("local_upload"),
+    version_id: str = Form(None, description="目标版本ID，缺省上传到默认版本"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     """批量上传数据集文件（一次上传生成一个采集批次 batch_id）
 
     - source: 数据来源(采集方式)
+    - version_id: 目标版本 ID，缺省上传到默认版本
     - 单个文件失败不影响其他文件；批次状态由文件状态聚合得出
     """
     svc = DatasetService(db)
@@ -413,6 +496,7 @@ async def upload_files_batch(
                     "storage_path": storage_path,
                     "batch_id": batch_id,
                     "sample_count": sample_count,
+                    "version_id": version_id,
                 },
             )
             results.append({
@@ -445,6 +529,7 @@ async def import_modelscope_dataset(
     sub_dir_path: str = Form("", description="仓库子目录（可选），如 data/train.csv"),
     source: str = Form("modelscope"),
     batch_id: str = Form(None),
+    version_id: str = Form(None, description="目标版本ID，缺省上传到默认版本"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -452,6 +537,7 @@ async def import_modelscope_dataset(
 
     - repo_id: 数据集仓库 ID（形如 owner/repo），如 swift/alpaca-cleaned
     - sub_dir_path: 仓库内子文件/子目录，留空自动下载并挑选主数据文件
+    - version_id: 目标版本 ID，缺省上传到默认版本
     - 下载后：若为 CSV 自动转换为 JSONL；多个文件分别登记为 DatasetFile
     """
     svc = DatasetService(db)
@@ -507,6 +593,7 @@ async def import_modelscope_dataset(
                     "storage_path": saved["storage_path"],
                     "batch_id": batch,
                     "sample_count": sample_count,
+                    "version_id": version_id,
                 },
             )
             results.append({

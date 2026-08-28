@@ -1,5 +1,5 @@
 import { get, post, put, del, upload, download } from '@/utils/request'
-import type { PaginatedData, Dataset, DatasetFile, CollectTask } from '@/types'
+import type { PaginatedData, Dataset, DatasetFile, DatasetVersion, CollectTask } from '@/types'
 
 const BASE = '/datasets'
 
@@ -23,8 +23,33 @@ export function getDatasetDetail(id: string) {
   return get<Dataset>(`${BASE}/${id}`)
 }
 
+// ========== 版本 ==========
 export function getDatasetVersions(id: string) {
-  return get<{ version: string; storagePath: string }[]>(`${BASE}/${id}/versions`)
+  return get<DatasetVersion[]>(`${BASE}/${id}/versions`)
+}
+
+export function getDatasetVersionDetail(id: string, versionId: string) {
+  return get<DatasetVersion>(`${BASE}/${id}/versions/${versionId}`)
+}
+
+export function createDatasetVersion(id: string, data: { version?: string; description?: string; isDefault?: boolean }) {
+  return post<DatasetVersion>(`${BASE}/${id}/versions`, data)
+}
+
+export function updateDatasetVersion(
+  id: string,
+  versionId: string,
+  data: { version?: string; description?: string; isDefault?: boolean },
+) {
+  return put<DatasetVersion>(`${BASE}/${id}/versions/${versionId}`, data)
+}
+
+export function setDefaultDatasetVersion(id: string, versionId: string) {
+  return put<DatasetVersion>(`${BASE}/${id}/versions/${versionId}/default`)
+}
+
+export function deleteDatasetVersion(id: string, versionId: string) {
+  return del(`${BASE}/${id}/versions/${versionId}`)
 }
 
 export function previewDataset(id: string, version: string) {
@@ -36,9 +61,10 @@ export function getDatasetFiles(id: string, params: Record<string, unknown>) {
   return get<PaginatedData<DatasetFile>>(`${BASE}/${id}/files`, params)
 }
 
-export function getDatasetFileStats(id: string) {
+export function getDatasetFileStats(id: string, params?: Record<string, unknown>) {
   return get<{ fileCount: number; success: number; failed: number; processing: number; totalSize: number }>(
     `${BASE}/${id}/files/stats`,
+    params,
   )
 }
 
@@ -58,8 +84,8 @@ export function deleteDatasetFile(fileId: string) {
   return del(`${BASE}/files/${fileId}`)
 }
 
-export function getCollectTasks(id: string) {
-  return get<CollectTask[]>(`${BASE}/${id}/files/collect-tasks`)
+export function getCollectTasks(id: string, params?: Record<string, unknown>) {
+  return get<CollectTask[]>(`${BASE}/${id}/files/collect-tasks`, params)
 }
 
 export function downloadDatasetFile(id: string, fileId: string, fallbackName?: string) {

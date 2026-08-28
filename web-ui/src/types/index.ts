@@ -373,7 +373,25 @@ export interface Dataset {
   createdAt: string
   updatedAt?: string
   fileCount?: number
+  versionCount?: number
+  defaultVersion?: string
   fileStats?: { fileCount: number; success: number; failed: number; processing: number; totalSize: number }
+}
+
+// 数据集版本
+export interface DatasetVersion {
+  id: string
+  datasetId: string
+  version: string
+  description?: string
+  storagePath?: string
+  fileCount: number
+  size: number
+  sampleCount: number
+  isDefault: boolean
+  createdBy?: string
+  createdAt: string
+  updatedAt?: string
 }
 
 export type DatasetFileStatus = 'processing' | 'success' | 'failed'
@@ -384,6 +402,7 @@ export type DatasetFileSource = 'local_upload' | 'platform' | 'modelscope'
 export interface DatasetFile {
   id: string
   datasetId: string
+  versionId?: string
   fileName: string
   source: DatasetFileSource
   status: DatasetFileStatus
@@ -500,6 +519,7 @@ export interface EvaluationTask {
   isBaseline: boolean
   datasetId: string
   datasetName?: string
+  datasetVersion?: string
   deploymentId: string
   deploymentName?: string
   scenes: string[]
