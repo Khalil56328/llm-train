@@ -145,7 +145,7 @@ class TrainService:
         if progress is not None:
             t.progress = progress
         if error_message is not None:
-            t.error_message = error_message
+            t.error_message = error_message or None  # 空串归一为 NULL，支持显式清除
         if output_model_id is not None:
             t.output_model_id = output_model_id
         if output_model_name is not None:

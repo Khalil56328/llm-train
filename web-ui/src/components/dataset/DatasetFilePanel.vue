@@ -109,16 +109,6 @@
               clearable
               :disabled="uploading"
             >
-              <template #append>
-                <el-select v-model="modelscopeExample" placeholder="示例" style="width: 190px" @change="onPickExample">
-                  <el-option
-                    v-for="opt in modelscopeExamples"
-                    :key="opt.repo"
-                    :label="opt.repo"
-                    :value="opt.repo"
-                  />
-                </el-select>
-              </template>
             </el-input>
           </el-form-item>
           <el-form-item label="子路径">
@@ -241,12 +231,6 @@ const uploadJobs = ref<UploadJob[]>([])
 const modelscopeRepo = ref('')
 const modelscopeSubPath = ref('')
 const modelscopeExample = ref('')
-const modelscopeExamples = [
-  { repo: 'swift/alpaca-cleaned', desc: '指令微调（SFT）' },
-  { repo: 'AI-ModelScope/alpaca-gpt4-data-zh', desc: '中文 SFT' },
-  { repo: 'swift/self-cognition', desc: '自我认知' },
-  { repo: 'blossom-org/Blossom-Chinese', desc: '中文对话' },
-]
 
 let uidSeq = Date.now()
 

@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
 
+    # 服务器对外 IP（模型部署模块生成 endpoint / 实例 host_ip 用，需可被外部真实调用）
+    # 留空则部署时自动探测本机对外网卡 IP；多网卡或探测不准时请显式填写
+    SERVER_IP: str = ""
+
     # 数据库（MySQL 8.0，asyncmy 驱动；默认本机 127.0.0.1，
     # 前后端一体部署，MySQL/Redis/MinIO 均为本机服务，无需跨主机连接串）
     DATABASE_URL: str = "mysql+asyncmy://llm_train:llm_train_2026@localhost:3306/llm_train?charset=utf8mb4"

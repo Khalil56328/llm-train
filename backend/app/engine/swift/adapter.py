@@ -475,6 +475,10 @@ class SwiftEngineAdapter:
             k in params for k in ("served_model_name", "served-model-name")
         ):
             params["served_model_name"] = served_model_name
+        # 显式绑定 0.0.0.0：监听所有网卡，外部才能通过服务器实际 IP 调用推理服务；
+        # 用户在部署参数中自行指定 host 时不覆盖
+        if not any(k in params for k in ("host",)):
+            params["host"] = "0.0.0.0"
         if framework == "vLLM":
             # vLLM >=0.6 官方推荐 `vllm serve`；旧入口 python -m vllm.entrypoints.openai.api_server
             # 已弃用（未来版本可能移除），作为回退保留。

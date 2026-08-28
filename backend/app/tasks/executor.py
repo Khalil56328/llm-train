@@ -1044,6 +1044,7 @@ async def run_training(task_id: str) -> str:
             task.progress = 5
             task.started_at = datetime.now()
             task.finished_at = None
+            task.error_message = None  # 清除上次执行的错误信息，避免重跑成功后仍展示
             await session.flush()
             await session.commit()
 
@@ -1125,6 +1126,7 @@ async def run_training(task_id: str) -> str:
                 task.status = "succeeded"
                 task.progress = 100
                 task.finished_at = datetime.now()
+                task.error_message = None  # 成功状态下不应残留历史错误信息
                 await writer.log(f"产出模型已入库: {task.output_model_name}", level="INFO")
                 await writer.flush()
                 await session.commit()
@@ -1164,6 +1166,56 @@ async def run_training(task_id: str) -> str:
 # 推理（部署）
 # ---------------------------------------------------------------------------
 
+
+def _ensure_port_available(port: int) -> int:
+    """确保端口可绑定：被占用（如平台后端 8000）时自动就近寻找空闲端口。
+
+    不设置 SO_REUSEADDR，保证 Windows/Linux 下都能真实检测出端口占用。
+    """
+    import socket
+
+    def _free(p: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("0.0.0.0", p))
+                return True
+            except OSError:
+                return False
+
+    if _free(port):
+        return port
+    for candidate in range(port + 1, port + 200):
+        if _free(candidate):
+            return candidate
+    raise RuntimeError(f"端口 {port}~{port + 199} 均被占用，无法启动推理服务")
+
+
+def _get_server_ip() -> str:
+    """获取本机对外提供服务的实际 IP（模型部署模块生成 endpoint / 实例 IP 用）。
+
+    优先使用 .env 中显式配置的 SERVER_IP（多网卡/探测不准场景）；
+    否则用 UDP connect 让内核选择对外出口网卡地址（不实际发包，无需网络可达）；
+    再失败回退 hostname 解析，最终回退 127.0.0.1。
+    """
+    import socket
+
+    configured = (getattr(settings, "SERVER_IP", "") or "").strip()
+    if configured:
+        return configured
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except Exception:
+        pass
+    try:
+        return socket.gethostbyname(socket.gethostname())
+    except Exception:
+        return "127.0.0.1"
+
 # 已启动的 mock 推理服务句柄：deploy_id -> server
 _MOCK_INFERENCE_SERVERS: Dict[str, "_MockInferenceServer"] = {}
 # 真实模式推理进程句柄：deploy_id -> Popen
@@ -1173,8 +1225,9 @@ _REAL_INFERENCE_PROCS: Dict[str, Any] = {}
 class _MockInferenceServer:
     """内存版 OpenAI 兼容推理服务，用于 mock 模式下让"部署→访问"真正可用。
 
-    仅在 127.0.0.1 上监听，实现 /v1/models 与 /v1/chat/completions，
-    从请求 messages 拼接出模拟回复，保证 test_deployment 能真实连通。
+    监听 0.0.0.0（所有网卡），实现 /v1/models 与 /v1/chat/completions，
+    从请求 messages 拼接出模拟回复，保证 test_deployment 与外部调用
+    都能通过服务器实际 IP 真实连通。
     """
 
     def __init__(self, host: str, port: int, model_name: str, deploy_id: str = ""):
@@ -1392,6 +1445,15 @@ async def run_inference(deploy_id: str) -> str:
                 model_path = str(merge_out)
 
             port = dep.access_port or dep.container_port or 8000
+            alloc_port = _ensure_port_available(port)
+            if alloc_port != port:
+                append_deploy_log(
+                    deploy_id,
+                    f"端口 {port} 已被占用（平台后端/其他服务），自动改用空闲端口 {alloc_port}",
+                )
+                dep.access_port = alloc_port
+                port = alloc_port
+            server_ip = _get_server_ip()
             cmd = SwiftEngineAdapter.build_inference_command(
                 model_path=model_path,
                 framework=dep.inference_framework or "vLLM",
@@ -1402,7 +1464,7 @@ async def run_inference(deploy_id: str) -> str:
             dep.engine_command = " ".join(cmd)
             dep.status = "running"
             dep.progress = 60
-            dep.endpoint = f"http://0.0.0.0:{port}/v1"
+            dep.endpoint = f"http://{server_ip}:{port}/v1"
             dep.error_message = None
             await session.flush()
             await session.commit()
@@ -1441,11 +1503,11 @@ async def run_inference(deploy_id: str) -> str:
             else:
                 # mock 模式：启动内存推理服务，让在线访问真正可用
                 append_deploy_log(deploy_id, f"启动 mock 推理服务（mock 模式）")
-                server = _MockInferenceServer("127.0.0.1", port, dep.model_name or "mock-model", deploy_id)
+                server = _MockInferenceServer("0.0.0.0", port, dep.model_name or "mock-model", deploy_id)
                 if server.start():
                     _MOCK_INFERENCE_SERVERS[deploy_id] = server
-                    dep.endpoint = f"http://127.0.0.1:{port}/v1"
-                    append_deploy_log(deploy_id, f"mock 推理服务监听 http://127.0.0.1:{port}/v1")
+                    dep.endpoint = f"http://{server_ip}:{port}/v1"
+                    append_deploy_log(deploy_id, f"mock 推理服务监听 http://{server_ip}:{port}/v1（服务器实际 IP）")
                 else:
                     dep.status = "failed"
                     dep.error_message = f"mock 推理服务启动失败（端口 {port} 可能被占用）"
@@ -1454,8 +1516,8 @@ async def run_inference(deploy_id: str) -> str:
 
             dep.status = "running"
             dep.progress = 100
-            # endpoint 统一用 127.0.0.1 供后端代理访问；对外暴露由容器/Nginx 编排
-            dep.endpoint = f"http://127.0.0.1:{port}/v1"
+            # endpoint 写服务器实际 IP，供外部直接调用；服务进程监听 0.0.0.0
+            dep.endpoint = f"http://{server_ip}:{port}/v1"
             await session.flush()
 
             # 回填 POD 实例状态（P1-4 修复）
@@ -1464,8 +1526,8 @@ async def run_inference(deploy_id: str) -> str:
             )
             for inst in inst_result.scalars().all():
                 inst.status = "running"
-                inst.host_ip = "127.0.0.1"
-                inst.pod_ip = "127.0.0.1"
+                inst.host_ip = server_ip
+                inst.pod_ip = server_ip
             await session.commit()
             return "ok"
         except Exception as exc:  # noqa: BLE001

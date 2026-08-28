@@ -152,7 +152,7 @@ async def submit_task(
     if op_err:
         raise HTTPException(status_code=400, detail=f"算子参数校验失败：{op_err}")
 
-    result = await svc.update_task_status(task_id, "running", progress=5)
+    result = await svc.update_task_status(task_id, "running", progress=5, error_message="")
 
     # 派发执行（Celery 优先，本地 fallback）
     dispatch = dispatch_task("train", task_id)
@@ -251,7 +251,7 @@ async def retry_task(
     if op_err:
         raise HTTPException(status_code=400, detail=f"算子参数校验失败：{op_err}")
 
-    result = await svc.update_task_status(task_id, "running", progress=5)
+    result = await svc.update_task_status(task_id, "running", progress=5, error_message="")
     dispatch = dispatch_task("train", task_id)
 
     notify_svc = NotificationService(db)
