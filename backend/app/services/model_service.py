@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from sqlalchemy import select, func, delete, or_
@@ -17,6 +18,20 @@ def _uuid() -> str:
 
 def _now() -> datetime:
     return datetime.now()
+
+
+def _dir_of(storage_path: str) -> str:
+    """返回 storage_path 所在目录（作为训练/部署引擎的模型路径输入）。
+
+    - 本地绝对路径：取父目录
+    - minio:// 路径：取对象 key 的目录部分，去掉 bucket 前缀，保留统一前缀
+    """
+    if storage_path.startswith("minio://"):
+        bucket_key = storage_path[len("minio://"):]
+        idx = bucket_key.rfind("/")
+        return f"minio://{bucket_key[:idx]}" if idx >= 0 else storage_path
+    p = Path(storage_path)
+    return str(p.parent if p.suffix else p)
 
 
 class ModelService:
@@ -299,7 +314,30 @@ class ModelService:
         await self.db.refresh(f)
         # 更新版本的文件数和大小
         await self._update_version_stats(version_id)
+        # 顶层模型 storage_path 为空时，用该版本第一个文件的父目录回写。
+        # 训练 executor / 部署推理只读取 Model.storage_path 作为模型路径，
+        # 若为空会回退默认 hub id，导致用户上传的模型不被使用；这里在上传
+        # 成功后自动补齐，与数据集 create_file 的回写逻辑保持一致。
+        file_path = data.get("filePath")
+        if file_path and data.get("status", "ready") in ("ready", "success"):
+            await self._backfill_model_storage_path(version_id, file_path)
         return _mfile_to_dict(f)
+
+    async def _backfill_model_storage_path(self, version_id: str, file_path: str) -> None:
+        """回写顶层 Model.storage_path（仅当其为空时生效）"""
+        ver = (await self.db.execute(
+            select(ModelVersion).where(ModelVersion.id == version_id)
+        )).scalar_one_or_none()
+        if not ver:
+            return
+        m = (await self.db.execute(
+            select(Model).where(Model.id == ver.model_id)
+        )).scalar_one_or_none()
+        if not m or m.storage_path:
+            return
+        m.storage_path = _dir_of(file_path)
+        m.updated_at = _now()
+        await self.db.flush()
 
     async def get_file(self, file_id: str) -> Optional[Dict]:
         result = await self.db.execute(select(ModelFile).where(ModelFile.id == file_id))

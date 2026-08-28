@@ -213,7 +213,7 @@ const steps = [
   { step: 4, title: '资源配置', desc: '选择资源池（单卡最低标准已锁定）' },
 ]
 
-const { datasetTree, modelTree, operatorTree, loadDatasetOptions, loadModelOptions, loadOperatorOptions, findDatasetName, findModelName, buildCascaderValue } = useTrainOptions()
+const { datasetTree, modelTree, operatorTree, loadDatasetOptions, ensureDatasetById, loadModelOptions, loadOperatorOptions, findDatasetName, findModelName, buildCascaderValue } = useTrainOptions()
 
 const form = reactive({
   name: '',
@@ -326,8 +326,9 @@ async function loadTaskDetail() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadDatasetOptions(), loadModelOptions(), loadOperatorOptions(), loadResourcePools()])
+  await Promise.all([loadDatasetOptions('CPT'), loadModelOptions(), loadOperatorOptions(), loadResourcePools()])
   await loadTaskDetail()
+  await ensureDatasetById(form.datasetId.split('/')[1] || form.datasetId)
 })
 </script>
 

@@ -231,7 +231,7 @@ const sceneOptions = [
   { value: 'code', label: '代码生成场景', desc: '代码生成与补全，适用于编程辅助等', icon: Cpu },
 ]
 
-const { datasetTree, modelTree, operatorTree, loadDatasetOptions, loadModelOptions, loadOperatorOptions, findModelName, findDatasetName, buildCascaderValue } = useTrainOptions()
+const { datasetTree, modelTree, operatorTree, loadDatasetOptions, ensureDatasetById, loadModelOptions, loadOperatorOptions, findModelName, findDatasetName, buildCascaderValue } = useTrainOptions()
 
 const form = reactive({
   name: '',
@@ -358,8 +358,9 @@ async function loadTaskDetail() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadDatasetOptions(), loadModelOptions(), loadOperatorOptions(), loadResourcePools()])
+  await Promise.all([loadDatasetOptions('SFT'), loadModelOptions(), loadOperatorOptions(), loadResourcePools()])
   await loadTaskDetail()
+  await ensureDatasetById(form.datasetId.split('/')[1] || form.datasetId)
 })
 </script>
 

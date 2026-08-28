@@ -181,7 +181,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
@@ -341,11 +341,33 @@ async function loadTaskDetail() {
   } catch { /* ignore */ }
 }
 
-const { datasetTree, modelTree, operatorTree, loadDatasetOptions, loadModelOptions, loadOperatorOptions, findModelName, findDatasetName, buildCascaderValue } = useTrainOptions()
+const { datasetTree, modelTree, operatorTree, loadDatasetOptions, ensureDatasetById, loadModelOptions, loadOperatorOptions, findModelName, findDatasetName, buildCascaderValue } = useTrainOptions()
+
+// 对齐方法 → 数据集数据类型（ORPO/SimPO 为偏好对齐，数据形态与 DPO 一致）
+const ALIGN_DATA_TYPE: Record<string, string> = {
+  dpo: 'DPO',
+  kto: 'KTO',
+  orpo: 'DPO',
+  simpo: 'DPO',
+}
+
+async function reloadDatasetsForAlign() {
+  await loadDatasetOptions(ALIGN_DATA_TYPE[form.alignMethod] || 'DPO')
+}
+
+watch(
+  () => form.alignMethod,
+  () => {
+    reloadDatasetsForAlign()
+  }
+)
 
 onMounted(async () => {
-  await Promise.all([loadDatasetOptions(), loadModelOptions(), loadOperatorOptions(), loadResourcePools()])
+  await Promise.all([loadModelOptions(), loadOperatorOptions(), loadResourcePools()])
   await loadTaskDetail()
+  await reloadDatasetsForAlign()
+  await ensureDatasetById(form.datasetId.split('/')[1] || form.datasetId)
+  await ensureDatasetById(form.valDatasetId.split('/')[1] || form.valDatasetId)
 })
 </script>
 

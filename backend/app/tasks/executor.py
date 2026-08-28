@@ -639,6 +639,44 @@ async def _create_output_model(
     return mid
 
 
+def _resolve_output_root(out_path: Path) -> Path:
+    """定位训练产物实际根目录（版本目录下钻）。
+
+    ms-swift 3.x+ 默认在 --output_dir 下创建 v{N}-{时间戳} 版本子目录，
+    checkpoint / images 等产物都在版本子目录里，顶层目录无 config.json。
+    若顶层无任何产物特征（无 config.json、无 checkpoint-*、无 adapter），
+    则下钻唯一的子目录（最多 5 层），保证 LoRA 检测、完整性校验与入库
+    路径都指向真实产物根。命令已带 --add_version false 时此函数为空操作。
+    """
+
+    def _looks_like_root(p: Path) -> bool:
+        if (p / "config.json").exists():
+            return True
+        try:
+            for child in p.iterdir():
+                if child.is_dir() and (
+                    child.name.startswith("checkpoint-")
+                    or (child / "adapter_config.json").exists()
+                ):
+                    return True
+        except OSError:
+            pass
+        return False
+
+    cur = out_path
+    depth = 0
+    while depth < 5 and cur.is_dir() and not _looks_like_root(cur):
+        try:
+            subdirs = [c for c in cur.iterdir() if c.is_dir() and not c.name.startswith(".")]
+        except OSError:
+            break
+        if len(subdirs) != 1:
+            break
+        cur = subdirs[0]
+        depth += 1
+    return cur
+
+
 async def _post_process_training(
     session,
     writer,
@@ -657,6 +695,18 @@ async def _post_process_training(
     is_export = task.task_type == "compression"
     final_dir = output_dir
 
+    # swift 3.x 可能在 output_dir 下建 v{N}-{时间戳} 版本子目录（命令已带
+    # --add_version false 时不发生），下钻定位真实产物根，避免在空顶层目录上
+    # 误判「无 LoRA 产物」并校验失败
+    resolved = _resolve_output_root(out_path)
+    if resolved != out_path:
+        await writer.log(
+            f"检测到 swift 版本子目录，产物根定位为: {resolved}", level="INFO"
+        )
+        output_dir = str(resolved)
+        out_path = resolved
+        final_dir = output_dir
+
     # ---- 1. LoRA 合并 ----
     if not is_export and exec_mode() == "real":
         adapter_dir = SwiftEngineAdapter.find_lora_adapter_dir(output_dir)
@@ -674,8 +724,9 @@ async def _post_process_training(
             if rc != 0:
                 return False, f"LoRA 权重合并失败（exit={rc}），请检查 swift export --merge_lora", output_dir
             await writer.log("LoRA 权重合并完成，产物已可部署", level="INFO")
-            # 合并产物作为最终入库目录
-            final_dir = str(merged_dir)
+            # 合并产物作为最终入库目录（若 swift 仍建了版本子目录，同样下钻）
+            merged_root = _resolve_output_root(merged_dir)
+            final_dir = str(merged_root)
         else:
             await writer.log(
                 "未检测到 LoRA adapter 产物，跳过合并（按完整模型产物处理）", level="INFO"

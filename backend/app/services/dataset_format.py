@@ -43,12 +43,23 @@ _ALIAS_MAP: Dict[str, str] = {
     "回答": "output",
     "输出": "output",
     "答案": "output",
-    # 续写/预训练/通用文本
+    # 续写/预训练/通用文本（text1 / text_zh / 文本内容 等前缀均可匹配）
     "text": "text",
+    "text1": "text",
+    "text2": "text",
+    "text3": "text",
     "content": "text",
     "corpus": "text",
+    "texts": "text",
+    "doc": "text",
+    "document": "text",
+    "sentence": "text",
+    "data": "text",
     "正文": "text",
     "文本": "text",
+    "文本内容": "text",
+    "文章": "text",
+    "语料": "text",
     # 对话（多轮）
     "conversations": "conversations",
     "messages": "conversations",
@@ -70,6 +81,11 @@ def _guess_columns(header: List[str]) -> Dict[str, str]:
     """根据表头猜测列到归一化字段的映射。
 
     返回 {归一化字段: 原始列名}；找不到任何可识别列时返回空 dict。
+
+    特殊规则：当 CSV 只有一列时，无论表头叫什么（text1 / corpus / data / 任意
+    名称），都按 CPT 续写/预训练文本处理（输出 {"text": ...}）。因为单列 CSV
+    只可能是纯文本语料，这也是 ModelScope 上常见语料集（如 CC-100、中文语料）的
+    典型形态。
     """
     mapping: Dict[str, str] = {}
     for col in header:
@@ -77,6 +93,10 @@ def _guess_columns(header: List[str]) -> Dict[str, str]:
         field = _ALIAS_MAP.get(key)
         if field and field not in mapping:
             mapping[field] = col
+
+    # 兜底：单列任意命名 → 视为文本列（CPT）
+    if not mapping and len(header) == 1:
+        return {"text": header[0]}
     return mapping
 
 
@@ -97,8 +117,8 @@ def csv_to_jsonl(csv_bytes: bytes, source_name: str = "") -> bytes:
     mapping = _guess_columns(reader.fieldnames)
     if not mapping:
         raise ValueError(
-            "无法识别 CSV 列，请确保包含以下字段之一：instruction/output、"
-            "prompt/response、query/answer、input/output、text、content 或 conversations"
+            "无法识别 CSV 列：单列文本会自动按 CPT（text）处理，多列数据请确保包含"
+            "instruction/output、prompt/response、query/answer、text 或 conversations 等字段"
         )
 
     records: List[Dict] = []

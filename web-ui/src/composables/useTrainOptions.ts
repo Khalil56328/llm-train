@@ -101,12 +101,14 @@ export function useTrainOptions() {
     return scopes
   }
 
-  async function loadDatasetOptions() {
+  async function loadDatasetOptions(dataType?: string) {
     try {
       const res = await getDatasetList({
         pageIndex: 1,
         pageSize: 9999,
         type: 'training',
+        // 按训练方式对应的数据类型过滤（如 SFT/DPO/CPT），限定可选数据集与任务匹配
+        ...(dataType ? { data_type: dataType } : {}),
       })
       datasetList.value = (res.list || []).filter((d: Dataset) => d.type === 'training')
       await loadDatasetVersions(datasetList.value)
@@ -276,6 +278,22 @@ export function useTrainOptions() {
     })
   )
 
+  /** 编辑回显兜底：若给定数据集已不在当前列表（可能被 data_type 过滤掉），补拉全量并合并 */
+  async function ensureDatasetById(id?: string) {
+    if (!id || datasetList.value.some((d) => d.id === id)) return
+    try {
+      const res = await getDatasetList({ pageIndex: 1, pageSize: 9999, type: 'training' })
+      const all = (res.list || []).filter((d: Dataset) => d.type === 'training')
+      const knownIds = new Set(datasetList.value.map((d) => d.id))
+      const extra = all.filter((d) => !knownIds.has(d.id))
+      if (!extra.length) return
+      datasetList.value = [...datasetList.value, ...extra]
+      await loadDatasetVersions(extra)
+    } catch {
+      /* 兜底失败不阻塞页面 */
+    }
+  }
+
   function findDatasetName(id: string) {
     const item = datasetList.value.find((d) => d.id === id)
     return item ? `${item.name}${item.sampleCount ? ` (${item.sampleCount}条)` : ''}` : id
@@ -337,6 +355,7 @@ export function useTrainOptions() {
     modelTree,
     operatorTree,
     loadDatasetOptions,
+    ensureDatasetById,
     loadModelOptions,
     loadOperatorOptions,
     findDatasetName,

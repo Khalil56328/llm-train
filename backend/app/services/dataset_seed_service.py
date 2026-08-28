@@ -34,6 +34,23 @@ def _uuid() -> str:
     return uuid.uuid4().hex
 
 
+# 视为数据文件的扩展名（dataset.json 为目录元信息，不算数据文件）
+_DATA_FILE_EXTS = {".jsonl", ".json", ".csv", ".txt", ".parquet"}
+
+
+def _has_data_files(abs_dir: Path) -> bool:
+    """目录内是否至少包含一个真实数据文件（非 dataset.json、非隐藏文件）"""
+    try:
+        for f in abs_dir.iterdir():
+            if not f.is_file() or f.name.startswith(".") or f.name == "dataset.json":
+                continue
+            if f.suffix.lower() in _DATA_FILE_EXTS:
+                return True
+    except OSError:
+        pass
+    return False
+
+
 class DatasetSeedService:
     """扫描 workspace/datasets/ 下带 dataset.json 的演示数据集并录入（幂等）"""
 
@@ -43,6 +60,15 @@ class DatasetSeedService:
     async def seed(self) -> int:
         """录入演示数据集，返回本次插入的数量（幂等）"""
         root = self._resolve_workspace_dir("datasets")
+        # 启动自愈：补齐缺失的演示数据集文件（SFT / 偏好 / 预训练），
+        # 不再单纯依赖部署脚本 seed_demo_data.py 的一次性生成
+        try:
+            from app.services.demo_dataset_generator import ensure_demo_datasets
+            generated = ensure_demo_datasets(root)
+            if generated:
+                print(f"[INFO] Dataset seed: 已生成/补齐演示数据集文件 {generated}")
+        except Exception as e:
+            print(f"[WARN] Demo dataset generation failed: {e}")
         if root is None or not root.is_dir():
             return 0
         inserted = 0
@@ -54,6 +80,10 @@ class DatasetSeedService:
             if not isinstance(meta, dict) or not meta.get("name"):
                 continue
             abs_dir = meta_path.parent
+            # 校验目录内确实存在数据文件，避免录入"只有元信息没有数据文件"的脏记录
+            if not _has_data_files(abs_dir):
+                print(f"[WARN] Dataset seed: 跳过无数据文件的目录 {abs_dir}")
+                continue
             # 幂等：已按 storage_path 录入过的数据集跳过
             existing = await self.db.execute(
                 select(Dataset.id).where(Dataset.storage_path == str(abs_dir)).limit(1)

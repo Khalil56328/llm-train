@@ -453,6 +453,8 @@ class SwiftEngineAdapter:
         # 环境变量不再以 --env 追加到命令行（ms-swift 各版本对该参数支持不一致，且
         # 4.x 可能直接报 unrecognized arguments）；由 executor 通过 build_process_env()
         # 写入子进程环境变量，效果等价且无参数风险。
+        # 关闭 swift 3.x 默认的 v{N}-{时间戳} 版本子目录，保证产物直接落 output_dir
+        cls._append_no_version_flag(parts, cmd_name)
         return parts
 
     @classmethod
@@ -538,11 +540,28 @@ class SwiftEngineAdapter:
         return not has_full_weight
 
     @classmethod
+    def _append_no_version_flag(cls, cmd: List[str], cmd_name: str) -> None:
+        """追加 `--add_version false`（若当前 swift 支持）。
+
+        ms-swift 3.x+ 默认会在 --output_dir 下再创建 v{N}-{时间戳} 版本子目录，
+        导致 checkpoint 产物比平台预期深一层、顶层目录无 config.json，
+        LoRA 检测与产物校验/入库路径全部失效。关闭该行为可让产物直接落
+        output_dir。旧版本 swift 无此参数（本就不建版本目录），不追加。
+        """
+        opts = cls._swift_help_opts(cmd_name)
+        if not opts or "--add_version" not in opts:
+            return
+        if "--add_version" in " ".join(cmd):
+            return
+        cmd.extend(["--add_version", "false"])
+
+    @classmethod
     def find_lora_adapter_dir(cls, path: str) -> Optional[str]:
         """在训练输出目录中定位 LoRA adapter checkpoint 目录。
 
-        优先使用目录自身（若它直接就是 adapter 目录）；否则扫描其下的
-        checkpoint-N 子目录，返回权重最新的一个。
+        优先使用目录自身（若它直接就是 adapter 目录）；否则递归扫描其下的
+        checkpoint-N 子目录（ms-swift 3.x 可能隔着一层 v{N}-{时间戳} 版本
+        目录，故不限定深度），返回 step 最大的一个。
         """
         p = Path(path)
         if not p.is_dir():
@@ -551,22 +570,22 @@ class SwiftEngineAdapter:
             return str(p)
         candidates = []
         try:
-            for child in p.iterdir():
+            for child in p.rglob("checkpoint-*"):
                 if not child.is_dir():
                     continue
-                name = child.name
-                if name.startswith("checkpoint-") and (child / "adapter_config.json").exists():
-                    try:
-                        step = int(name.split("-")[-1])
-                    except ValueError:
-                        step = -1
-                    candidates.append((step, child))
+                if not (child / "adapter_config.json").exists():
+                    continue
+                try:
+                    step = int(child.name.split("-")[-1])
+                except ValueError:
+                    step = -1
+                candidates.append((step, str(child)))
         except OSError:
             return None
         if not candidates:
             return None
         candidates.sort(key=lambda x: x[0])
-        return str(candidates[-1][1])
+        return candidates[-1][1]
 
     @classmethod
     def build_merge_command(
@@ -595,6 +614,8 @@ class SwiftEngineAdapter:
         # 若输出目录已存在，允许覆盖（幂等重试）
         cmd.append("--exist_ok")
         cmd.append("true")
+        # 关闭 swift 3.x 默认的版本子目录，保证合并产物直接落 output_dir
+        cls._append_no_version_flag(cmd, cmd_name)
         return cmd
 
     @classmethod
@@ -627,6 +648,8 @@ class SwiftEngineAdapter:
                 if flag in cmd:
                     continue  # 已出现（显式参数）则跳过，避免重复传参
                 cmd.extend([flag, str(value)])
+        # 关闭 swift 3.x 默认的版本子目录，保证量化产物直接落 output_dir
+        cls._append_no_version_flag(cmd, cmd_name)
         return cmd
 
     @classmethod

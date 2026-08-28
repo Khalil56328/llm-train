@@ -214,7 +214,7 @@ const form = reactive({
   memory: 32,
 })
 
-const { datasetTree, modelTree, operatorTree, loadDatasetOptions, loadModelOptions, loadOperatorOptions, findModelName, findDatasetName, buildCascaderValue } = useTrainOptions()
+const { datasetTree, modelTree, operatorTree, loadDatasetOptions, ensureDatasetById, loadModelOptions, loadOperatorOptions, findModelName, findDatasetName, buildCascaderValue } = useTrainOptions()
 
 function goBack() {
   router.push('/train/fine-tune')
@@ -301,8 +301,10 @@ async function loadTaskDetail() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadDatasetOptions(), loadModelOptions(), loadOperatorOptions(), loadResourcePools()])
+  await Promise.all([loadDatasetOptions('SFT'), loadModelOptions(), loadOperatorOptions(), loadResourcePools()])
   await loadTaskDetail()
+  // 编辑回显：已选数据集不在 SFT 列表时，补齐全量以保留原选择
+  await ensureDatasetById(form.datasetId.split('/')[1] || form.datasetId)
 })
 </script>
 

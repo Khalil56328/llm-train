@@ -36,6 +36,21 @@ def _fmt_time(dt: Optional[datetime]) -> Optional[str]:
     return dt.astimezone(_BJ).isoformat()
 
 
+def _dir_of(storage_path: str) -> str:
+    """返回 storage_path 所在目录（作为训练引擎的 --dataset 输入）。
+
+    - 本地绝对路径：取父目录（swift 通常按目录扫描数据文件）
+    - minio:// 路径：取对象 key 的目录部分，去掉 bucket 前缀，保留统一前缀
+    """
+    if storage_path.startswith("minio://"):
+        bucket_key = storage_path[len("minio://"):]
+        _, _, key = bucket_key.partition("/")
+        idx = key.rfind("/")
+        return f"minio://{bucket_key[: bucket_key.rfind('/')]}" if idx >= 0 else storage_path
+    p = Path(storage_path)
+    return str(p.parent if p.suffix else p)
+
+
 class DatasetService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -289,7 +304,8 @@ class DatasetService:
 
     async def create_file(self, dataset_id: str, data: Dict) -> Optional[Dict]:
         result = await self.db.execute(select(Dataset).where(Dataset.id == dataset_id))
-        if not result.scalar_one_or_none():
+        ds = result.scalar_one_or_none()
+        if not ds:
             return None
         f = DatasetFile(
             id=_uuid(),
@@ -309,6 +325,14 @@ class DatasetService:
         await self.db.flush()
         await self.db.refresh(f)
         await self._sync_dataset_size(dataset_id)
+        # 顶层数据集 storage_path 为空时，用第一个成功文件的父目录回写。
+        # 训练 executor 只读取 Dataset.storage_path 交给 swift，若为空会回退用
+        # dataset_id 当路径导致「路径不存在」；这里在首次上传成功后自动补齐，
+        # 使上传数据集与平台初始化数据集一样可直接用于真实训练。
+        if f.status == "success" and data.get("storage_path") and not ds.storage_path:
+            ds.storage_path = _dir_of(data["storage_path"])
+            ds.updated_at = _now()
+            await self.db.flush()
         return _file_to_dict(f)
 
     async def get_file(self, file_id: str) -> Optional[Dict]:

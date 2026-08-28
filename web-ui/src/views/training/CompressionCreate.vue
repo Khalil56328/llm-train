@@ -304,11 +304,12 @@ async function loadTaskDetail() {
   } catch { /* ignore */ }
 }
 
-const { datasetTree, modelTree, operatorTree, loadDatasetOptions, loadModelOptions, loadOperatorOptions, findModelName, buildCascaderValue } = useTrainOptions()
+const { datasetTree, modelTree, operatorTree, loadDatasetOptions, ensureDatasetById, loadModelOptions, loadOperatorOptions, findModelName, buildCascaderValue } = useTrainOptions()
 
 onMounted(async () => {
-  await Promise.all([loadDatasetOptions(), loadModelOptions(), loadOperatorOptions(), loadResourcePools()])
+  await Promise.all([loadDatasetOptions('general'), loadModelOptions(), loadOperatorOptions(), loadResourcePools()])
   await loadTaskDetail()
+  await ensureDatasetById(form.calibDataset.split('/')[1] || form.calibDataset)
 })
 </script>
 
