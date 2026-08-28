@@ -66,6 +66,7 @@
             <el-dropdown-menu>
               <el-dropdown-item v-if="row.status !== 'running'" @click="toggleService(row)">部署</el-dropdown-item>
               <el-dropdown-item v-if="row.status === 'running'" @click="toggleService(row)">停止</el-dropdown-item>
+              <el-dropdown-item @click="openTestDrawer(row)">测试</el-dropdown-item>
               <el-dropdown-item @click="goEdit(row)">修改</el-dropdown-item>
               <el-dropdown-item @click="deleteDeployment(row)">删除</el-dropdown-item>
             </el-dropdown-menu>
@@ -74,20 +75,63 @@
       </template>
     </DataTable>
 
-    <!-- 在线测试弹窗 -->
-    <el-dialog v-model="testVisible" title="在线测试" width="700px" class="custom-modal">
-      <div class="test-area">
-        <el-input v-model="testPrompt" type="textarea" :rows="6" placeholder="请输入测试 Prompt..." />
-        <div class="test-response" v-if="testResponse">
-          <div class="test-response-header">模型响应</div>
-          <div class="test-response-body">{{ testResponse }}</div>
+    <!-- 在线测试抽屉（右侧弹出，多轮对话） -->
+    <el-drawer
+      v-model="testVisible"
+      direction="rtl"
+      size="33%"
+      class="chat-test-drawer"
+      :close-on-click-modal="false"
+      @close="handleTestDrawerClose"
+    >
+      <template #header>
+        <div class="test-drawer-title">
+          <span class="test-drawer-name">在线测试</span>
+          <span v-if="testRow" class="test-drawer-service">
+            {{ testRow.name }}
+            <el-tag
+              :type="DeployStatusColorMap[testRow.status as DeployStatus] || 'info'"
+              size="small"
+            >
+              {{ DeployStatusMap[testRow.status as DeployStatus] || testRow.status }}
+            </el-tag>
+          </span>
+        </div>
+      </template>
+      <div v-if="testRow" class="test-drawer-body">
+        <template v-if="testRow.status === 'running'">
+          <div ref="chatBox" class="chat-box">
+            <div v-if="!chatMessages.length" class="chat-empty">
+              开始与模型对话吧（流式输出，Enter 发送，Shift + Enter 换行）
+            </div>
+            <div v-for="(msg, i) in chatMessages" :key="i" class="chat-msg" :class="msg.role">
+              <div class="chat-role">{{ msg.role === 'user' ? '我' : '模型' }}</div>
+              <div class="chat-content">{{ msg.content }}</div>
+            </div>
+          </div>
+          <div class="chat-input-row">
+            <el-input
+              v-model="testPrompt"
+              type="textarea"
+              :rows="3"
+              resize="none"
+              :disabled="testLoading"
+              placeholder="请输入消息，Enter 发送，Shift + Enter 换行"
+              @keydown.enter.exact.prevent="sendTest"
+            />
+            <div class="chat-actions">
+              <el-button type="primary" :loading="testLoading" :disabled="!testPrompt.trim()" @click="sendTest">
+                发送
+              </el-button>
+              <el-button v-if="chatMessages.length" @click="clearChat">清空</el-button>
+            </div>
+          </div>
+        </template>
+        <div v-else class="test-not-running">
+          <el-empty description="服务未运行，无法进行在线测试，请先启动服务" />
         </div>
       </div>
-      <template #footer>
-        <el-button @click="testVisible = false">关闭</el-button>
-        <el-button type="primary" :loading="testLoading" @click="sendTest">发送</el-button>
-      </template>
-    </el-dialog>
+    </el-drawer>
 
     <!-- 详情抽屉 -->
     <el-drawer v-model="detailVisible" title="部署详情" size="550px" direction="rtl">
@@ -109,7 +153,7 @@
         <div class="drawer-actions">
           <el-button type="primary" v-if="detailData.status !== 'running'" @click="toggleService(detailData)">启动服务</el-button>
           <el-button type="danger" v-if="detailData.status === 'running'" @click="toggleService(detailData)">停止服务</el-button>
-          <el-button @click="onlineTest(detailData)">在线测试</el-button>
+          <el-button type="primary" v-if="detailData.status === 'running'" @click="openTestDrawer(detailData)">在线测试</el-button>
         </div>
       </template>
     </el-drawer>
@@ -117,7 +161,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
@@ -130,7 +174,7 @@ import {
   stopDeployment,
   deleteDeployment as deleteDeploymentApi,
   getDeployInstances,
-  testDeployment,
+  chatCompletionsStream,
 } from '@/api/service'
 import type { Deployment, DeployStatus, DeployInstance } from '@/types'
 import { DeployStatusMap, DeployStatusColorMap } from '@/types'
@@ -144,10 +188,12 @@ const total = ref(0)
 const pageIndex = ref(1)
 const pageSize = ref(20)
 const testVisible = ref(false)
+const testRow = ref<any>(null)
 const testPrompt = ref('')
-const testResponse = ref('')
 const testLoading = ref(false)
-const currentTestRow = ref<any>(null)
+const chatMessages = ref<{ role: string; content: string }[]>([])
+const chatAbort = ref<AbortController | null>(null)
+const chatBox = ref<HTMLElement | null>(null)
 const detailVisible = ref(false)
 const detailData = ref<Deployment | null>(null)
 
@@ -216,25 +262,72 @@ function goCreate() { router.push('/service/deployment/create') }
 function goDetail(row: any) { router.push(`/service/deployment/detail/${row.id}`) }
 function goEdit(row: any) { router.push(`/service/deployment/create?id=${row.id}`) }
 
-function onlineTest(row: any) {
-  currentTestRow.value = row
-  testPrompt.value = ''
-  testResponse.value = ''
+function openTestDrawer(row: any) {
+  // 切换到不同服务时重置会话
+  if (!testRow.value || testRow.value.id !== row.id) {
+    chatAbort.value?.abort()
+    chatMessages.value = []
+    testPrompt.value = ''
+    testLoading.value = false
+    testRow.value = row
+  }
+  detailVisible.value = false
   testVisible.value = true
 }
 
+function handleTestDrawerClose() {
+  chatAbort.value?.abort()
+  testLoading.value = false
+}
+
+function clearChat() {
+  chatMessages.value = []
+  testPrompt.value = ''
+}
+
 async function sendTest() {
-  if (!currentTestRow.value) return
+  const prompt = testPrompt.value.trim()
+  if (!prompt || testLoading.value || !testRow.value) return
+  if (testRow.value.status !== 'running') {
+    ElMessage.warning('服务未运行，无法进行在线测试')
+    return
+  }
   testLoading.value = true
+  testPrompt.value = ''
+  chatMessages.value.push({ role: 'user', content: prompt })
+  const assistantIdx = chatMessages.value.push({ role: 'assistant', content: '' }) - 1
+  const history = chatMessages.value.slice(0, -1).map((m) => ({ role: m.role, content: m.content }))
+  chatAbort.value = new AbortController()
   try {
-    const res = await testDeployment(currentTestRow.value.id, { prompt: testPrompt.value })
-    testResponse.value = res.response || '无响应'
+    await chatCompletionsStream(
+      testRow.value.id,
+      history,
+      (delta) => {
+        chatMessages.value[assistantIdx].content += delta
+      },
+      chatAbort.value.signal,
+    )
   } catch (e: any) {
-    testResponse.value = '请求失败: ' + (e.message || '未知错误')
+    chatMessages.value[assistantIdx].content += `\n[请求失败: ${e.message || '未知错误'}]`
   } finally {
     testLoading.value = false
+    chatAbort.value = null
   }
 }
+
+// 对话内容变化时自动滚动到底部
+watch(
+  () => chatMessages.value[chatMessages.value.length - 1]?.content,
+  async () => {
+    await nextTick()
+    const el = chatBox.value
+    if (el) el.scrollTop = el.scrollHeight
+  },
+)
+
+onUnmounted(() => {
+  chatAbort.value?.abort()
+})
 
 async function toggleService(row: any) {
   try {
@@ -288,17 +381,135 @@ onMounted(fetchData)
   }
 }
 
-.test-area {
-  .test-response {
-    margin-top: 16px;
-    .test-response-header { font-weight: 600; color: $text-primary; margin-bottom: 8px; }
-    .test-response-body { background: $bg-color-light; padding: 12px 16px; border-radius: 8px; line-height: 1.6; white-space: pre-wrap; }
-  }
-}
-
 .drawer-actions {
   margin-top: 24px;
   display: flex;
   gap: 10px;
+}
+
+// ===== 在线测试抽屉 =====
+.test-drawer-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+
+  .test-drawer-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  .test-drawer-service {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: $text-secondary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.test-drawer-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+
+  .test-not-running {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+.chat-box {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: $bg-color-light;
+  border-radius: $border-radius-large;
+  padding: 16px 14px;
+
+  .chat-empty {
+    text-align: center;
+    color: $text-placeholder;
+    font-size: 13px;
+    padding: 32px 0;
+  }
+
+  .chat-msg {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 14px;
+
+    .chat-role {
+      font-size: 12px;
+      color: $text-secondary;
+      margin-bottom: 4px;
+    }
+
+    .chat-content {
+      max-width: 86%;
+      padding: 10px 12px;
+      border-radius: $border-radius-large;
+      font-size: 14px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    &.user {
+      align-items: flex-end;
+
+      .chat-content {
+        background: $color-primary;
+        color: #fff;
+        border-top-right-radius: $border-radius-small;
+      }
+    }
+
+    &.assistant {
+      align-items: flex-start;
+
+      .chat-content {
+        background: $bg-color-white;
+        color: $text-primary;
+        border: 1px solid $border-color-lighter;
+        border-top-left-radius: $border-radius-small;
+      }
+    }
+  }
+}
+
+.chat-input-row {
+  padding-top: 12px;
+
+  .chat-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0;
+    margin-top: 10px;
+  }
+}
+</style>
+
+<style lang="scss">
+// 让测试抽屉与列表内容区等高（从 header 下沿开始），宽度由 size=33% 控制
+.chat-test-drawer {
+  .el-drawer {
+    top: $header-height;
+    height: calc(100% - $header-height) !important;
+  }
+
+  .el-drawer__body {
+    display: flex;
+    flex-direction: column;
+    padding: 0 16px 16px;
+    overflow: hidden;
+  }
 }
 </style>

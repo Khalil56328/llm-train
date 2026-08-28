@@ -57,30 +57,6 @@
               <el-descriptions-item label="容器端口">{{ detail.containerPort || 8000 }}</el-descriptions-item>
               <el-descriptions-item label="访问端口">{{ detail.accessPort || '-' }}</el-descriptions-item>
             </el-descriptions>
-            <div class="test-section" v-if="detail.status === 'running'">
-              <h4>在线测试（多轮对话）</h4>
-              <div class="chat-box">
-                <div v-if="!chatMessages.length" class="chat-empty">开始一段对话吧（流式输出）</div>
-                <div v-for="(msg, i) in chatMessages" :key="i" class="chat-msg" :class="msg.role">
-                  <div class="chat-role">{{ msg.role === 'user' ? '我' : '模型' }}</div>
-                  <div class="chat-content">{{ msg.content }}</div>
-                </div>
-              </div>
-              <div class="chat-input-row">
-                <el-input
-                  v-model="testPrompt"
-                  type="textarea"
-                  :rows="3"
-                  placeholder="请输入消息，Enter 发送，Shift+Enter 换行"
-                  @keydown.enter.exact.prevent="sendTest"
-                  :disabled="testLoading"
-                />
-                <div class="chat-actions">
-                  <el-button :disabled="!testPrompt && !testLoading" :loading="testLoading" type="primary" @click="sendTest">发送</el-button>
-                  <el-button v-if="chatMessages.length" @click="clearChat">清空</el-button>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
 
@@ -126,7 +102,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import PageHeaderCard from '@/components/common/PageHeaderCard.vue'
 import {
@@ -135,7 +111,6 @@ import {
   stopDeployment,
   getDeployInstances,
   getDeploymentLogs,
-  chatCompletionsStream,
 } from '@/api/service'
 import type { Deployment, DeployStatus, DeployInstance } from '@/types'
 import { DeployStatusMap, DeployStatusColorMap } from '@/types'
@@ -145,10 +120,6 @@ const route = useRoute()
 const loading = ref(false)
 const detail = ref<Deployment | null>(null)
 const instances = ref<DeployInstance[]>([])
-const testPrompt = ref('')
-const testLoading = ref(false)
-const chatMessages = ref<{ role: string; content: string }[]>([])
-const chatAbort = ref<AbortController | null>(null)
 const deployLogs = ref<string[]>([])
 const deployLogBox = ref<HTMLElement>()
 
@@ -185,44 +156,6 @@ async function toggleService(action: 'start' | 'stop') {
   } catch (e: any) {
     ElMessage.error(e.message || '操作失败')
   }
-}
-
-onUnmounted(() => {
-  chatAbort.value?.abort()
-})
-
-async function sendTest() {
-  if (!detail.value) return
-  const text = testPrompt.value.trim()
-  if (!text || testLoading.value) return
-  chatMessages.value.push({ role: 'user', content: text })
-  chatMessages.value.push({ role: 'assistant', content: '' })
-  testPrompt.value = ''
-  testLoading.value = true
-  chatAbort.value = new AbortController()
-  const assistantIdx = chatMessages.value.length - 1
-  const history = chatMessages.value.slice(0, -1).map((m) => ({ role: m.role, content: m.content }))
-  try {
-    await chatCompletionsStream(
-      detail.value.id,
-      history,
-      (delta) => {
-        chatMessages.value[assistantIdx].content += delta
-      },
-      chatAbort.value.signal,
-    )
-  } catch (e: any) {
-    if (e?.name !== 'AbortError') {
-      chatMessages.value[assistantIdx].content = '（请求失败: ' + (e?.message || '未知错误') + '）'
-    }
-  } finally {
-    testLoading.value = false
-  }
-}
-
-function clearChat() {
-  chatMessages.value = []
-  testPrompt.value = ''
 }
 
 async function loadLogs() {
@@ -294,54 +227,6 @@ onMounted(() => {
 
 .text-muted {
   color: $text-secondary;
-}
-
-.test-section {
-  margin-top: 24px;
-  h4 { margin-bottom: 12px; }
-  .chat-box {
-    background: $bg-color-light;
-    border-radius: 8px;
-    padding: 16px;
-    max-height: 360px;
-    overflow-y: auto;
-    margin-bottom: 12px;
-    .chat-empty { color: $text-secondary; text-align: center; padding: 20px 0; }
-    .chat-msg {
-      margin-bottom: 12px;
-      display: flex;
-      gap: 8px;
-      &.user { flex-direction: row-reverse; }
-      .chat-role {
-        flex-shrink: 0;
-        width: 40px;
-        height: 28px;
-        line-height: 28px;
-        text-align: center;
-        border-radius: 6px;
-        font-size: 12px;
-        color: #fff;
-        background: $color-primary;
-      }
-      &.assistant .chat-role { background: $text-secondary; }
-      .chat-content {
-        background: #fff;
-        padding: 8px 12px;
-        border-radius: 8px;
-        line-height: 1.6;
-        white-space: pre-wrap;
-        word-break: break-word;
-        max-width: 75%;
-        font-size: $font-size-base;
-      }
-    }
-  }
-  .chat-input-row {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    .chat-actions { display: flex; gap: 8px; }
-  }
 }
 
 .deploy-log-header {
