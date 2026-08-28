@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File, Form
 from fastapi.responses import Response
@@ -17,7 +17,7 @@ from app.core.auth import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.response import success_response
-from app.core.storage import read_object, save_data, save_upload
+from app.core.storage import read_object, save_data, save_upload, version_key
 from app.services.dataset_format import csv_to_jsonl
 from app.services.dataset_service import DatasetService
 from app.schemas.dataset import (
@@ -104,17 +104,34 @@ def _jsonl_name(file_name: str) -> str:
     return Path(file_name).stem + ".jsonl"
 
 
-async def _convert_csv_to_jsonl(file: UploadFile, dataset_id: str) -> Dict:
+async def _resolve_version_id(
+    svc: DatasetService, dataset_id: str, version_id: Optional[str]
+) -> Optional[str]:
+    """解析目标版本 ID：显式指定优先，否则取默认版本（会自动触发历史文件迁移）"""
+    if version_id:
+        return version_id
+    versions = await svc.list_versions(dataset_id) or []
+    for v in versions:
+        if v.get("isDefault"):
+            return v["id"]
+    return versions[0]["id"] if versions else None
+
+
+async def _convert_csv_to_jsonl(
+    file: UploadFile, dataset_id: str, version_id: Optional[str] = None
+) -> Dict:
     """读取上传的 CSV 内容并转换为 JSONL 保存，返回统一存储结构。
 
     转换后的 JSONL 与原 CSV 命名同源（同名 .jsonl），便于用户识别来源。
+    文件保存到目标版本目录下（datasets/{dataset_id}/versions/{version_id}/...）。
     """
     raw = await file.read()
     max_size = settings.UPLOAD_MAX_SIZE_MB * 1024 * 1024
     if max_size and len(raw) > max_size:
         raise ValueError(f"文件大小超过限制（{max_size // (1024 * 1024)}MB）")
     jsonl_data = csv_to_jsonl(raw, source_name=file.filename or "")
-    return save_data(jsonl_data, _jsonl_name(file.filename or "data.jsonl"), f"datasets/{dataset_id}")
+    sub_dir = version_key(dataset_id, version_id) if version_id else f"datasets/{dataset_id}"
+    return save_data(jsonl_data, _jsonl_name(file.filename or "data.jsonl"), sub_dir)
 
 
 
@@ -392,17 +409,18 @@ async def upload_file(
     if _invalid_ext(file_name):
         raise HTTPException(status_code=400, detail=f"不支持的文件类型: {Path(file_name).suffix}")
 
-    # 通过存储适配器保存（minio / local 自动切换），分块读取 + 大小限制
+    # 通过存储适配器保存（minio / local 自动切换），分块读取 + 大小限制。
+    # 解析目标版本：文件真正落盘到该版本的独立目录（versions/{version_id}/）
     max_size = settings.UPLOAD_MAX_SIZE_MB * 1024 * 1024
     try:
+        target_vid = await _resolve_version_id(svc, dataset_id, version_id)
+        sub_dir = version_key(dataset_id, target_vid) if target_vid else f"datasets/{dataset_id}"
         if _is_csv(file_name):
             # CSV 自动转换为 JSONL，与 MS-Swift 训练格式对齐
-            saved = await _convert_csv_to_jsonl(file, dataset_id)
+            saved = await _convert_csv_to_jsonl(file, dataset_id, target_vid)
             file_name = _jsonl_name(file_name)
         else:
-            saved = await save_upload(
-                file, sub_dir=f"datasets/{dataset_id}", max_size=max_size
-            )
+            saved = await save_upload(file, sub_dir=sub_dir, max_size=max_size)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -419,7 +437,7 @@ async def upload_file(
                 "storage_path": storage_path,
                 "batch_id": batch_id or _new_batch_id(),
                 "sample_count": sample_count,
-                "version_id": version_id,
+                "version_id": target_vid,
             },
         )
     except ValueError as e:
@@ -456,6 +474,8 @@ async def upload_files_batch(
 
     batch_id = _new_batch_id()
     max_size = settings.UPLOAD_MAX_SIZE_MB * 1024 * 1024
+    target_vid = await _resolve_version_id(svc, dataset_id, version_id)
+    sub_dir = version_key(dataset_id, target_vid) if target_vid else f"datasets/{dataset_id}"
     results = []
     seen_names = set()
     for file in files:
@@ -478,12 +498,10 @@ async def upload_files_batch(
         try:
             if _is_csv(file_name):
                 # CSV 自动转换为 JSONL
-                saved = await _convert_csv_to_jsonl(file, dataset_id)
+                saved = await _convert_csv_to_jsonl(file, dataset_id, target_vid)
                 file_name = _jsonl_name(file_name)
             else:
-                saved = await save_upload(
-                    file, sub_dir=f"datasets/{dataset_id}", max_size=max_size
-                )
+                saved = await save_upload(file, sub_dir=sub_dir, max_size=max_size)
             storage_path = saved["storage_path"]
             sample_count = DatasetService.count_file_rows(storage_path, file_name)
             created = await svc.create_file(
@@ -496,7 +514,7 @@ async def upload_files_batch(
                     "storage_path": storage_path,
                     "batch_id": batch_id,
                     "sample_count": sample_count,
-                    "version_id": version_id,
+                    "version_id": target_vid,
                 },
             )
             results.append({
@@ -566,6 +584,8 @@ async def import_modelscope_dataset(
         raise HTTPException(status_code=400, detail="仓库中未找到可用数据文件（json/jsonl/csv/txt/parquet）")
 
     batch = batch_id or _new_batch_id()
+    target_vid = await _resolve_version_id(svc, dataset_id, version_id)
+    sub_dir = version_key(dataset_id, target_vid) if target_vid else f"datasets/{dataset_id}"
     results: List[Dict] = []
     for local_path in files:
         try:
@@ -574,13 +594,13 @@ async def import_modelscope_dataset(
             if _is_csv(name):
                 converted = csv_to_jsonl(raw, source_name=name)
                 target_name = _jsonl_name(name)
-                saved = save_data(converted, target_name, f"datasets/{dataset_id}")
+                saved = save_data(converted, target_name, sub_dir)
                 file_name = target_name
             elif _invalid_ext(name):
                 # 跳过白名单外的文件
                 continue
             else:
-                saved = save_data(raw, name, f"datasets/{dataset_id}")
+                saved = save_data(raw, name, sub_dir)
                 file_name = name
             sample_count = DatasetService.count_file_rows(saved["storage_path"], file_name)
             created = await svc.create_file(
@@ -593,7 +613,7 @@ async def import_modelscope_dataset(
                     "storage_path": saved["storage_path"],
                     "batch_id": batch,
                     "sample_count": sample_count,
-                    "version_id": version_id,
+                    "version_id": target_vid,
                 },
             )
             results.append({
@@ -731,7 +751,7 @@ async def import_dataset(
             "eval_dimensions": dataset.get("evalDimensions"),
             "description": dataset.get("description"),
             "source": "import",
-            "storage_path": dataset.get("storagePath"),
+            # 不继承源数据集存储路径，复制后的文件由 copy_files 落到目标默认版本目录
             "size": dataset.get("size", 0),
             "sample_count": dataset.get("sampleCount", 0),
             "is_public": False,

@@ -206,3 +206,91 @@ def delete_object(storage_path: str) -> bool:
     except Exception:  # noqa: BLE001
         return False
     return False
+
+
+def version_key(dataset_id: str, version_id: str) -> str:
+    """版本目录对象 key（不含 bucket）：datasets/{dataset_id}/versions/{version_id}"""
+    return f"datasets/{dataset_id}/versions/{version_id}"
+
+
+def version_dir(dataset_id: str, version_id: str) -> str:
+    """版本目录 storage_path（本地绝对路径 / minio 前缀），本地模式下自动创建目录"""
+    key = version_key(dataset_id, version_id)
+    if storage_mode() == "minio":
+        return f"minio://{settings.MINIO_BUCKET}/{key}"
+    target = _local_root / "uploads" / key
+    target.mkdir(parents=True, exist_ok=True)
+    return str(target)
+
+
+def _split_minio(storage_path: str) -> tuple[str, str]:
+    bucket_key = storage_path[len("minio://"):]
+    bucket, _, key = bucket_key.partition("/")
+    return bucket, key
+
+
+def _copy_or_move(
+    src_storage_path: str, dst_sub_dir: str, keep_src: bool
+) -> str:
+    """复制（keep_src=True）或移动（keep_src=False）对象到新子目录，返回新的 storage_path"""
+    if src_storage_path.startswith("minio://"):
+        client = _get_minio()
+        if client is None:
+            return src_storage_path
+        bucket, key = _split_minio(src_storage_path)
+        name = key.rsplit("/", 1)[-1]
+        new_key = f"{dst_sub_dir}/{name}"
+        try:
+            from minio import CopySource  # noqa: PLC0415
+            client.copy_object(bucket, new_key, copy_source=CopySource(bucket, key))
+            if not keep_src:
+                client.remove_object(bucket, key)
+            return f"minio://{bucket}/{new_key}"
+        except Exception:  # noqa: BLE001
+            return src_storage_path
+    path = Path(src_storage_path)
+    if path.exists() and path.is_file():
+        dst = _local_root / "uploads" / dst_sub_dir / path.name
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        import shutil  # noqa: PLC0415
+        try:
+            if keep_src:
+                shutil.copy2(str(path), str(dst))
+            else:
+                shutil.move(str(path), str(dst))
+            return str(dst)
+        except Exception:  # noqa: BLE001
+            return src_storage_path
+    return src_storage_path
+
+
+def move_object(src_storage_path: str, dst_sub_dir: str) -> str:
+    """将对象移动到新子目录（保留文件名），返回新的 storage_path"""
+    return _copy_or_move(src_storage_path, dst_sub_dir, keep_src=False)
+
+
+def copy_object(src_storage_path: str, dst_sub_dir: str) -> str:
+    """复制对象到新子目录（保留文件名，源保留），返回新的 storage_path"""
+    return _copy_or_move(src_storage_path, dst_sub_dir, keep_src=True)
+
+
+def delete_prefix(prefix: str) -> bool:
+    """删除前缀目录下的所有对象（minio 遍历前缀 / 本地 rmtree）"""
+    try:
+        if storage_mode() == "minio":
+            client = _get_minio()
+            if client is None:
+                return False
+            objs = list(
+                client.list_objects(settings.MINIO_BUCKET, prefix=prefix, recursive=True)
+            )
+            for obj in objs:
+                client.remove_object(settings.MINIO_BUCKET, obj.object_name)
+            return True
+        target = _local_root / "uploads" / prefix
+        if target.exists():
+            import shutil  # noqa: PLC0415
+            shutil.rmtree(target)
+        return True
+    except Exception:  # noqa: BLE001
+        return False

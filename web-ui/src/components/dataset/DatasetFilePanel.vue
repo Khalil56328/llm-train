@@ -275,6 +275,17 @@ let uidSeq = Date.now()
 const columns: ColumnConfig[] = [
   { prop: 'fileName', label: '文件名称', minWidth: 220, slot: 'fileName' },
   {
+    prop: 'versionId',
+    label: '所属版本',
+    width: 110,
+    type: 'formatter',
+    formatter: (v: unknown) => {
+      const id = v as string
+      if (!id) return '-'
+      return versions.value.find((x) => x.id === id)?.version || id.slice(0, 8)
+    },
+  },
+  {
     prop: 'status',
     label: '状态',
     width: 90,

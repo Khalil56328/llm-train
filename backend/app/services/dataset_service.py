@@ -10,7 +10,15 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select, func, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.storage import delete_object, iter_object_chunks
+from app.core.storage import (
+    copy_object,
+    delete_object,
+    delete_prefix,
+    iter_object_chunks,
+    move_object,
+    version_dir,
+    version_key,
+)
 from app.models.dataset import Dataset, DatasetVersion, DatasetFile
 from app.models.user import User
 
@@ -49,6 +57,20 @@ def _dir_of(storage_path: str) -> str:
         return f"minio://{bucket_key[: bucket_key.rfind('/')]}" if idx >= 0 else storage_path
     p = Path(storage_path)
     return str(p.parent if p.suffix else p)
+
+
+def _is_legacy_file_path(storage_path: str, dataset_id: str) -> bool:
+    """文件是否仍位于数据集级目录（datasets/{dataset_id}/，未按版本组织）。
+
+    历史数据（版本功能上线前）的文件都直接落在数据集级目录下；
+    版本目录结构为 datasets/{dataset_id}/versions/{version_id}/...
+    """
+    if not storage_path:
+        return False
+    norm = storage_path.replace("\\", "/")
+    if f"/datasets/{dataset_id}/" not in norm:
+        return False
+    return "/versions/" not in norm
 
 
 class DatasetService:
@@ -208,13 +230,18 @@ class DatasetService:
             updated_at=_now(),
         )
         self.db.add(d)
-        # 自动创建初始版本 v1 并设为默认
+        # 自动创建初始版本 v1 并设为默认；每个版本拥有独立存储目录，
+        # 文件真正落在 versions/{version_id}/ 下
+        v1_id = _uuid()
+        v1_storage = data.get("storage_path") or version_dir(d.id, v1_id)
+        if not d.storage_path:
+            d.storage_path = v1_storage
         v1 = DatasetVersion(
-            id=_uuid(),
+            id=v1_id,
             dataset_id=d.id,
             version="v1",
             description=data.get("description"),
-            storage_path=data.get("storage_path"),
+            storage_path=v1_storage,
             is_default=True,
             created_by=owner_name or owner_id,
             created_at=_now(),
@@ -255,6 +282,7 @@ class DatasetService:
 
     # ========== 版本 ==========
     async def list_versions(self, dataset_id: str) -> List[Dict]:
+        await self._migrate_legacy_files(dataset_id)
         result = await self.db.execute(
             select(DatasetVersion).where(DatasetVersion.dataset_id == dataset_id)
                 .order_by(DatasetVersion.created_at.desc())
@@ -306,6 +334,53 @@ class DatasetService:
             .values(is_default=True, updated_at=_now())
         )
 
+    async def _migrate_legacy_files(self, dataset_id: str) -> int:
+        """历史兼容：将未挂版本 / 未按版本目录落盘的旧文件迁移到默认版本。
+
+        版本功能上线前的文件 version_id 为空，物理文件直接落在数据集级目录
+        （datasets/{dataset_id}/...）。迁移后：
+        1. version_id 为空 → 挂到默认版本
+        2. 物理文件仍位于数据集级目录 → 移动到默认版本目录
+        """
+        default_v = await self._get_default_version(dataset_id)
+        if not default_v:
+            return 0
+        rows = (await self.db.execute(
+            select(DatasetFile).where(
+                DatasetFile.dataset_id == dataset_id,
+                DatasetFile.status == "success",
+            )
+        )).scalars().all()
+        if not rows:
+            return 0
+        versions: Dict[str, DatasetVersion] = {}
+        moved = changed = 0
+        for f in rows:
+            old = f.storage_path or ""
+            if not _is_legacy_file_path(old, dataset_id):
+                continue
+            if not f.version_id:
+                f.version_id = default_v.id
+                changed += 1
+            v = versions.get(f.version_id)
+            if v is None:
+                v = (await self.db.execute(
+                    select(DatasetVersion).where(DatasetVersion.id == f.version_id)
+                )).scalar_one_or_none()
+                versions[f.version_id] = v
+            if v is None:
+                continue
+            new_path = move_object(old, version_key(dataset_id, f.version_id))
+            if new_path != old:
+                f.storage_path = new_path
+                moved += 1
+        if changed or moved:
+            await self.db.flush()
+            for vid in versions:
+                if vid:
+                    await self._recount_version_stats(vid)
+        return moved
+
     async def create_version(
         self,
         dataset_id: str,
@@ -331,12 +406,13 @@ class DatasetService:
         if dup:
             raise ValueError(f"版本号 {version} 已存在")
 
+        v_id = _uuid()
         v = DatasetVersion(
-            id=_uuid(),
+            id=v_id,
             dataset_id=dataset_id,
             version=version,
             description=data.get("description"),
-            storage_path=data.get("storage_path") or ds.storage_path,
+            storage_path=data.get("storage_path") or version_dir(dataset_id, v_id),
             is_default=False,
             created_by=created_by,
             created_at=_now(),
@@ -421,7 +497,8 @@ class DatasetService:
 
         was_default = bool(v.is_default)
 
-        # 删除版本下文件记录及物理文件
+        # 删除版本目录下所有物理对象（含未登记文件），再删除文件记录
+        delete_prefix(version_key(dataset_id, version_id))
         files = (await self.db.execute(
             select(DatasetFile).where(DatasetFile.version_id == version_id)
         )).scalars().all()
@@ -462,6 +539,7 @@ class DatasetService:
         if not result.scalar_one_or_none():
             return None
 
+        await self._migrate_legacy_files(dataset_id)
         q = select(DatasetFile).where(DatasetFile.dataset_id == dataset_id)
         count_q = select(func.count(DatasetFile.id)).where(DatasetFile.dataset_id == dataset_id)
 
@@ -565,22 +643,20 @@ class DatasetService:
         await self._sync_dataset_size(dataset_id)
         if f.version_id:
             await self._recount_version_stats(f.version_id)
-            # 版本存储路径为空时，用第一个成功文件的父目录回写
-            if f.status == "success" and data.get("storage_path"):
+            # 版本存储路径缺失时（历史数据），用版本目录补齐
+            if f.status == "success":
                 v_result = await self.db.execute(
                     select(DatasetVersion).where(DatasetVersion.id == f.version_id)
                 )
                 v = v_result.scalar_one_or_none()
                 if v and not v.storage_path:
-                    v.storage_path = _dir_of(data["storage_path"])
+                    v.storage_path = version_dir(dataset_id, f.version_id)
                     v.updated_at = _now()
                     await self.db.flush()
-        # 顶层数据集 storage_path 为空时，用第一个成功文件的父目录回写。
-        # 训练 executor 只读取 Dataset.storage_path 交给 swift，若为空会回退用
-        # dataset_id 当路径导致「路径不存在」；这里在首次上传成功后自动补齐，
+        # 顶层数据集 storage_path 为空时，指向默认版本目录，供训练 executor 回退使用。
         # 使上传数据集与平台初始化数据集一样可直接用于真实训练。
-        if f.status == "success" and data.get("storage_path") and not ds.storage_path:
-            ds.storage_path = _dir_of(data["storage_path"])
+        if f.status == "success" and not ds.storage_path and f.version_id:
+            ds.storage_path = version_dir(dataset_id, f.version_id)
             ds.updated_at = _now()
             await self.db.flush()
         return _file_to_dict(f)
@@ -693,15 +769,23 @@ class DatasetService:
     async def copy_files(self, source_id: str, target_id: str) -> int:
         result = await self.db.execute(select(DatasetFile).where(DatasetFile.dataset_id == source_id))
         rows = result.scalars().all()
+        # 复制到目标数据集的默认版本，物理文件也复制到目标版本目录
+        dv = await self._get_default_version(target_id)
+        target_vid = dv.id if dv else None
+        target_sub = version_key(target_id, target_vid) if target_vid else f"datasets/{target_id}"
         for f in rows:
+            new_path = f.storage_path
+            if f.storage_path and f.status == "success":
+                new_path = copy_object(f.storage_path, target_sub)
             self.db.add(DatasetFile(
                 id=_uuid(),
                 dataset_id=target_id,
+                version_id=target_vid,
                 file_name=f.file_name,
                 source=f.source,
                 status=f.status,
                 size=f.size,
-                storage_path=f.storage_path,
+                storage_path=new_path,
                 batch_id=None,
                 sample_count=f.sample_count,
                 error_message=f.error_message,
@@ -710,6 +794,8 @@ class DatasetService:
             ))
         await self.db.flush()
         await self._sync_dataset_size(target_id)
+        if target_vid:
+            await self._recount_version_stats(target_vid)
         return len(rows)
 
     async def _resolve_owner_names(self, owner_ids: List[str]) -> Dict[str, str]:

@@ -123,8 +123,10 @@ class DatasetSeedService:
         self.db.add(dset)
         await self.db.flush()
 
+        # 演示数据集目录本身就是 v1 版本目录（文件直接位于该目录下）
+        v1_id = _uuid()
         self.db.add(DatasetVersion(
-            id=_uuid(),
+            id=v1_id,
             dataset_id=dset.id,
             version="v1",
             storage_path=str(abs_dir),
@@ -143,6 +145,7 @@ class DatasetSeedService:
             self.db.add(DatasetFile(
                 id=_uuid(),
                 dataset_id=dset.id,
+                version_id=v1_id,
                 file_name=f.name,
                 source="platform",
                 status="success",
