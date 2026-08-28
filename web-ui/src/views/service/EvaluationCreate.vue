@@ -25,9 +25,20 @@
           <div class="section-title">评估对象配置</div>
           <div class="section-body">
             <el-form-item label="数据集" prop="datasetId">
-              <el-select v-model="form.datasetId" placeholder="请选择数据集" filterable style="width: 100%"
+              <el-select v-model="form.datasetId" placeholder="请选择评测数据集" filterable style="width: 100%"
                 @change="onDatasetChange">
-                <el-option v-for="ds in datasetList" :key="ds.id" :label="ds.name" :value="ds.id" />
+                <el-option-group
+                  v-for="group in datasetGroups"
+                  :key="group.label"
+                  :label="group.label"
+                >
+                  <el-option
+                    v-for="ds in group.options"
+                    :key="ds.id"
+                    :label="ds.name"
+                    :value="ds.id"
+                  />
+                </el-option-group>
               </el-select>
             </el-form-item>
             <el-form-item label="模型服务" prop="deploymentId">
@@ -150,7 +161,7 @@ import { ElMessage } from 'element-plus'
 import { Plus, Delete } from '@element-plus/icons-vue'
 import PageHeaderCard from '@/components/common/PageHeaderCard.vue'
 import { createEvaluation } from '@/api/service'
-import { getDatasetList } from '@/api/dataset'
+import { getDatasetList, getPlazaDatasets } from '@/api/dataset'
 import { getDeploymentList } from '@/api/service'
 import type { EvalScene, ManualEvalScene } from '@/types'
 import { EvalSceneMap, EvalSceneIconMap, ManualEvalSceneMap, ManualEvalSceneIconMap } from '@/types'
@@ -183,7 +194,16 @@ const rules = {
 
 const formRef = ref()
 const datasetList = ref<any[]>([])
+const plazaDatasetList = ref<any[]>([])
 const deploymentList = ref<any[]>([])
+
+// 数据集下拉分组：我的评测数据集 + 数据集广场（公开评测数据集）
+const datasetGroups = computed(() => {
+  const groups: { label: string; options: any[] }[] = []
+  if (datasetList.value.length) groups.push({ label: '我的评测数据集', options: datasetList.value })
+  if (plazaDatasetList.value.length) groups.push({ label: '数据集广场', options: plazaDatasetList.value })
+  return groups
+})
 
 function toggleScene(key: string) {
   const idx = form.value.scenes.indexOf(key)
@@ -192,7 +212,7 @@ function toggleScene(key: string) {
 }
 
 function onDatasetChange(val: string) {
-  const ds = datasetList.value.find((d: any) => d.id === val)
+  const ds = [...datasetList.value, ...plazaDatasetList.value].find((d: any) => d.id === val)
   if (ds) form.value.datasetName = ds.name
 }
 
@@ -222,9 +242,23 @@ async function handleSubmit() {
 
 async function loadDatasets() {
   try {
-    const res = await getDatasetList({ pageIndex: 1, pageSize: 200, type: 'evaluation' })
-    datasetList.value = res.list || []
-  } catch { datasetList.value = [] }
+    // 仅评测数据集：当前用户自己创建的 + 数据集广场公开的
+    const [mine, plaza] = await Promise.all([
+      getDatasetList({ pageIndex: 1, pageSize: 200, dataset_type: 'evaluation' }),
+      getPlazaDatasets({ pageIndex: 1, pageSize: 9999, dataset_type: 'evaluation' }),
+    ])
+    const mineList = (mine.list || []).filter((d: any) => d.type === 'evaluation')
+    const mineIds = new Set(mineList.map((d: any) => d.id))
+    // 广场列表中排除自己已创建的（已在"我的"分组展示），并兜底过滤评测类型
+    const plazaList = (plaza.list || []).filter(
+      (d: any) => d.type === 'evaluation' && !mineIds.has(d.id),
+    )
+    datasetList.value = mineList
+    plazaDatasetList.value = plazaList
+  } catch {
+    datasetList.value = []
+    plazaDatasetList.value = []
+  }
 }
 
 async function loadDeployments() {
