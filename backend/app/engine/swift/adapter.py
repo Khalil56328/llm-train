@@ -464,8 +464,17 @@ class SwiftEngineAdapter:
         framework: str = "vLLM",
         port: int = 8000,
         params: Optional[Dict[str, Any]] = None,
+        served_model_name: Optional[str] = None,
     ) -> List[str]:
         """生成推理 CLI 命令"""
+        params = dict(params or {})
+        # 显式指定对外模型名：vLLM 未加 --served-model-name 时会以模型路径全串
+        # 注册模型名，而转发请求注入的是平台 modelName，两者不一致时
+        # vLLM 校验 model 字段失败并返回 404 NotFoundError。
+        if served_model_name and not any(
+            k in params for k in ("served_model_name", "served-model-name")
+        ):
+            params["served_model_name"] = served_model_name
         if framework == "vLLM":
             # vLLM >=0.6 官方推荐 `vllm serve`；旧入口 python -m vllm.entrypoints.openai.api_server
             # 已弃用（未来版本可能移除），作为回退保留。
@@ -493,6 +502,9 @@ class SwiftEngineAdapter:
                 "--port", str(port),
                 "--infer_backend", "mindie",
             ])
+            if params:
+                for key, value in params.items():
+                    cmd.extend([f"--{key}", str(value)])
             return cmd
 
         # 默认 Swift deploy

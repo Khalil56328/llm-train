@@ -48,9 +48,11 @@ export async function chatCompletionsStream(
   onDelta: (text: string) => void,
   signal?: AbortSignal,
 ): Promise<string> {
-  const base = import.meta.env.VITE_API_BASE_URL || ''
+  // 与 axios 实例（request.ts baseURL = VITE_API_BASE_URL）保持同一推导：
+  // VITE_API_BASE_URL 已含 /api 前缀，未设置时兜底 /api，避免拼出 /api/api/ 双前缀
+  const base = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/+$/, '')
   const token = localStorage.getItem('access_token') || ''
-  const resp = await fetch(`${base}/api/inference/chat/completions`, {
+  const resp = await fetch(`${base}/inference/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -81,12 +83,18 @@ export async function chatCompletionsStream(
       if (data === '[DONE]') continue
       try {
         const obj = JSON.parse(data)
+        if (obj?.error) {
+          throw new Error(obj.error?.message || '推理服务错误')
+        }
         const delta = obj?.choices?.[0]?.delta?.content || obj?.choices?.[0]?.message?.content || ''
         if (delta) {
           full += delta
           onDelta(delta)
         }
-      } catch (e) { /* 忽略非 JSON 片段 */ }
+      } catch (e) {
+        // 仅忽略 JSON 解析失败（上游偶发非 JSON 片段），其余错误（如上游 error 事件）向上抛出
+        if (!(e instanceof SyntaxError)) throw e
+      }
     }
   }
   return full

@@ -44,7 +44,8 @@ def _base_url(endpoint: str) -> str:
 
 @router.post("/inference/chat/completions")
 async def chat_completions(
-    deploy_id: str = Body(..., embed=True),
+    # 前端与其余 API 一致使用 camelCase（如 modelId/accessPort），此处加别名兼容
+    deploy_id: str = Body(..., embed=True, alias="deployId"),
     payload: Dict[str, Any] = Body(..., embed=True),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
@@ -60,13 +61,19 @@ async def chat_completions(
         # 降级：非流式转发
         return await _forward_sync(base, deploy_id, payload)
 
-    async with httpx.AsyncClient(timeout=None) as client:
-        if stream:
-            async def _proxy_stream():
-                req = client.build_request(
+    if stream:
+        async def _proxy_stream():
+            # 注意：client 的生命周期必须由生成器自己管理。
+            # StreamingResponse 在 handler 返回后才被 FastAPI 迭代，
+            # 若 client 在 handler 作用域内创建，返回时即被 aclose()，
+            # 生成器一启动就会抛 "client has been closed" 导致流中断（前端 network error）。
+            async with httpx.AsyncClient(timeout=None) as client:
+                # client.stream() 是 httpx 标准流式上下文管理器；
+                # 注意 client.send() 是普通协程方法（需 await，返回 Response），
+                # 不支持 async with，误用会在首次迭代时抛 TypeError 导致空流。
+                async with client.stream(
                     "POST", base + "/chat/completions", json=payload
-                )
-                async with client.send(req, stream=True) as resp:
+                ) as resp:
                     if resp.status_code >= 400:
                         text = (await resp.aread()).decode("utf-8", "replace")
                         yield f"data: {json.dumps({'error': {'message': f'HTTP {resp.status_code}: {text}'}}, ensure_ascii=False)}\n\n"
@@ -74,8 +81,9 @@ async def chat_completions(
                         return
                     async for chunk in resp.aiter_bytes():
                         yield chunk
-            return StreamingResponse(_proxy_stream(), media_type="text/event-stream")
+        return StreamingResponse(_proxy_stream(), media_type="text/event-stream")
 
+    async with httpx.AsyncClient(timeout=None) as client:
         resp = await client.post(base + "/chat/completions", json=payload)
         if resp.status_code >= 400:
             raise HTTPException(status_code=502, detail=f"推理服务返回错误: HTTP {resp.status_code}")

@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -1210,6 +1211,42 @@ class _MockInferenceServer:
                 else:
                     self._send_json({"error": "not found"}, 404)
 
+            def _send_sse(self, reply: str, rid: str):
+                """按 OpenAI 流式协议（SSE）逐块推送回复，以 [DONE] 结束。
+
+                不写 Content-Length，依赖连接关闭表示响应结束（HTTP/1.0 行为），
+                httpx 流式转发可正常读取。
+                """
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.close_connection = True
+                self.end_headers()
+
+                def _chunk(delta: dict, finish: Optional[str] = None) -> bytes:
+                    payload = {
+                        "id": rid,
+                        "object": "chat.completion.chunk",
+                        "model": owner.model_name,
+                        "choices": [{
+                            "index": 0,
+                            "delta": delta,
+                            "finish_reason": finish,
+                        }],
+                    }
+                    return ("data: " + json.dumps(payload, ensure_ascii=False) + "\n\n").encode("utf-8")
+
+                self.wfile.write(_chunk({"role": "assistant", "content": ""}))
+                self.wfile.flush()
+                step = 8
+                for i in range(0, len(reply), step):
+                    self.wfile.write(_chunk({"content": reply[i:i + step]}))
+                    self.wfile.flush()
+                    time.sleep(0.02)
+                self.wfile.write(_chunk({}, "stop"))
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+
             def do_POST(self):
                 if not self.path.rstrip("/").endswith("/chat/completions"):
                     self._send_json({"error": "not found"}, 404)
@@ -1226,12 +1263,16 @@ class _MockInferenceServer:
                 ).strip() or "（空输入）"
                 if owner.deploy_id:
                     append_deploy_log(owner.deploy_id, f"[推理请求] messages={len(messages)}, input={text[:80]}")
+                rid = f"mock-{uuid.uuid4().hex[:12]}"
                 reply = (
                     f"[mock 推理服务] 收到 {len(messages)} 条消息。"
                     f"模型：{owner.model_name}。你的输入是：{text[:100]}"
                 )
+                if data.get("stream"):
+                    self._send_sse(reply, rid)
+                    return
                 self._send_json({
-                    "id": f"mock-{uuid.uuid4().hex[:12]}",
+                    "id": rid,
                     "object": "chat.completion",
                     "model": owner.model_name,
                     "choices": [{
@@ -1356,6 +1397,7 @@ async def run_inference(deploy_id: str) -> str:
                 framework=dep.inference_framework or "vLLM",
                 port=port,
                 params=dep.params or {},
+                served_model_name=dep.model_name or None,
             )
             dep.engine_command = " ".join(cmd)
             dep.status = "running"
