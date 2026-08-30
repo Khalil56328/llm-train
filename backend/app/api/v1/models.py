@@ -44,7 +44,7 @@ def _cleanup_storage(files) -> None:
 @router.get("/plaza/search")
 async def plaza_models(
     page_index: int = Query(1, ge=1, alias="pageIndex"),
-    page_size: int = Query(12, ge=1, le=100, alias="pageSize"),
+    page_size: int = Query(12, ge=1, le=9999, alias="pageSize"),
     keyword: str = Query(None),
     type: str = Query(None),
     spec: str = Query(None),
@@ -313,7 +313,7 @@ async def download_version_files(
 @router.get("")
 async def list_models(
     page_index: int = Query(1, ge=1, alias="pageIndex"),
-    page_size: int = Query(12, ge=1, le=100, alias="pageSize"),
+    page_size: int = Query(12, ge=1, le=9999, alias="pageSize"),
     keyword: str = Query(None),
     type: str = Query(None),
     spec: str = Query(None),

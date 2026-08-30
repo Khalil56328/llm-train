@@ -20,7 +20,7 @@ router = APIRouter()
 @router.get("/plaza/search")
 async def plaza_operators(
     page_index: int = Query(1, ge=1, alias="pageIndex"),
-    page_size: int = Query(12, ge=1, le=100, alias="pageSize"),
+    page_size: int = Query(12, ge=1, le=9999, alias="pageSize"),
     keyword: str = Query(None),
     category: str = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -39,7 +39,7 @@ async def plaza_operators(
 @router.get("")
 async def list_operators(
     page_index: int = Query(1, ge=1, alias="pageIndex"),
-    page_size: int = Query(20, ge=1, le=100, alias="pageSize"),
+    page_size: int = Query(20, ge=1, le=9999, alias="pageSize"),
     keyword: str = Query(None),
     category: str = Query(None),
     db: AsyncSession = Depends(get_db),

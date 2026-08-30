@@ -138,7 +138,7 @@ async def _convert_csv_to_jsonl(
 @router.get("")
 async def list_datasets(
     page_index: int = Query(1, ge=1, alias="pageIndex"),
-    page_size: int = Query(20, ge=1, le=100, alias="pageSize"),
+    page_size: int = Query(20, ge=1, le=9999, alias="pageSize"),
     keyword: str = Query(None),
     category: str = Query(None),
     data_type: str = Query(None),
@@ -321,7 +321,7 @@ async def delete_version(
 async def list_files(
     dataset_id: str,
     page_index: int = Query(1, ge=1, alias="pageIndex"),
-    page_size: int = Query(10, ge=1, le=100, alias="pageSize"),
+    page_size: int = Query(10, ge=1, le=9999, alias="pageSize"),
     keyword: str = Query(None),
     status: str = Query(None),
     version_id: str = Query(None, alias="versionId", description="按数据集版本过滤"),

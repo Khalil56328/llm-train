@@ -20,7 +20,7 @@ router = APIRouter()
 @router.get("")
 async def list_deployments(
     page_index: int = Query(1, ge=1, alias="pageIndex"),
-    page_size: int = Query(20, ge=1, le=100, alias="pageSize"),
+    page_size: int = Query(20, ge=1, le=9999, alias="pageSize"),
     keyword: str = Query(None),
     status: str = Query(None),
     db: AsyncSession = Depends(get_db),

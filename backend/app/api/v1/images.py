@@ -16,7 +16,7 @@ router = APIRouter()
 @router.get("")
 async def list_images(
     page_index: int = Query(1, ge=1, alias="pageIndex"),
-    page_size: int = Query(10, ge=1, le=100, alias="pageSize"),
+    page_size: int = Query(10, ge=1, le=9999, alias="pageSize"),
     keyword: Optional[str] = Query(None),
     resource_type: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
