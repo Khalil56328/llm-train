@@ -391,6 +391,24 @@ def _dataset_complete(d: Path) -> bool:
     return True
 
 
+def _preference_rows_ok(d: Path) -> bool:
+    """偏好对齐数据格式校验：swift 4.x 要求 messages(chosen) + rejected_messages/rejected_response。
+
+    旧版生成的 {conversations/chosen/rejected} 字段不被 swift 识别
+    （报 inputs.rejected is None，全部样本被过滤），需视为不完整并重建。
+    """
+    jl = d / "train.jsonl"
+    if not jl.is_file():
+        return False
+    try:
+        first = json.loads(jl.read_text(encoding="utf-8").splitlines()[0])
+    except Exception:
+        return False
+    return bool(first.get("messages")) and bool(
+        first.get("rejected_messages") or first.get("rejected_response")
+    )
+
+
 def _build_sft_rows() -> List[dict]:
     return [{"messages": [
         {"role": m["from"], "content": m["value"]} for m in row["conversations"]
@@ -398,6 +416,12 @@ def _build_sft_rows() -> List[dict]:
 
 
 def _build_preference_rows(sft_turns: List[List[dict]], samples: int) -> List[dict]:
+    """偏好对齐（DPO/ORPO/SimPO/RM）行：swift 4.x 标准格式。
+
+    messages（chosen 对话） + rejected_messages（完整拒绝对话）。
+    注意旧版 {conversations/chosen/rejected} 字段不被 swift 4.x 识别，
+    加载时报 `inputs.rejected is None` 并过滤掉全部样本。
+    """
     rng = random.Random(20260806)
     rows: List[dict] = []
     for turns in sft_turns[:samples]:
@@ -410,7 +434,7 @@ def _build_preference_rows(sft_turns: List[List[dict]], samples: int) -> List[di
              else m["content"]}
             for m in turns
         ]
-        rows.append({"conversations": chosen, "chosen": chosen, "rejected": rejected})
+        rows.append({"messages": chosen, "rejected_messages": rejected})
     return rows
 
 
@@ -740,14 +764,18 @@ def _render_fallback(path: Path, w: int, h: int, seed: int) -> None:
 
 
 def _render_placeholder(path: Path, kind: str, spec: Optional[dict] = None, seed: int = 0) -> None:
-    """占位图统一入口：优先 Pillow，失败退化为标准库 PNG"""
+    """占位图统一入口：优先 Pillow，失败退化为标准库 PNG。
+
+    渲染后立即做有效性自检：若 Pillow 写出的文件异常（极小概率的格式兼容问题），
+    回退标准库兜底 PNG，保证落盘文件始终可被 PIL 打开。
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     if kind == "scene":
-        if spec is not None and _render_scene_pil(path, spec):
+        if spec is not None and _render_scene_pil(path, spec) and _png_ok(path):
             return
         _render_fallback(path, 480, 360, seed)
         return
-    if _render_ocr_pil(path, kind):
+    if _render_ocr_pil(path, kind) and _png_ok(path):
         return
     _render_fallback(path, 640, 420, seed)
 
@@ -762,8 +790,14 @@ def _write_multimodal_images(images_dir: Path, samples: List[dict]) -> None:
             _render_placeholder(path, item["kind"], seed=i)
 
 
-def _build_multimodal_rows(samples: List[dict]) -> List[dict]:
-    """多模态 SFT 行：messages（user 前置 <image> 标记）+ images 相对路径"""
+def _build_multimodal_rows(samples: List[dict], data_dir: Path) -> List[dict]:
+    """多模态 SFT 行：messages（user 前置 <image> 标记）+ images 绝对路径。
+
+    MS-Swift 官方文档明确推荐 images 使用绝对路径；其实现（vision_utils.load_image）
+    对相对路径按进程 CWD 解析，而 executor 启动 swift 时 CWD 为 TRAIN_WORKSPACE，
+    与数据集 jsonl 所在目录不一致，会导致图片加载失败（UnidentifiedImageError）。
+    """
+    img_root = (data_dir / "images").resolve()
     rows: List[dict] = []
     for item in samples:
         rows.append({
@@ -771,17 +805,73 @@ def _build_multimodal_rows(samples: List[dict]) -> List[dict]:
                 {"role": "user", "content": f"<image>\n{item['question']}"},
                 {"role": "assistant", "content": item["answer"]},
             ],
-            "images": [f"images/{item['image']}"],
+            "images": [str(img_root / item["image"])],
         })
     return rows
 
 
+def _png_ok(path: Path) -> bool:
+    """校验 PNG 有效性：8 字节魔数 + （环境有 PIL 时）PIL verify。
+
+    演示数据集的占位图若在文件同步/传输（git 文本模式、非二进制复制等）中损坏，
+    swift 加载时会被 PIL 判为 UnidentifiedImageError 并导致训练失败；这里在
+    生成与完整性检查两个环节都做校验，损坏文件会被判定为"不完整"从而自动重写。
+    """
+    try:
+        if path.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
+            return False
+    except OSError:
+        return False
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            im.verify()
+        return True
+    except ImportError:
+        # 环境无 PIL：魔数校验通过即可，交由 swift 侧按其运行时判断
+        return True
+    except Exception:
+        return False
+
+
+def _multimodal_rows_abs(d: Path) -> bool:
+    """校验 train.jsonl 首行 images 是否为绝对路径（或 URL）。
+
+    旧版本生成的相对路径数据（images/invoice_01.png）在 swift 加载时会因
+    CWD 基准不匹配而失败，需视为不完整并重新生成。
+    """
+    jl = d / "train.jsonl"
+    if not jl.is_file():
+        return False
+    try:
+        lines = jl.read_text(encoding="utf-8").splitlines()
+        first = json.loads(lines[0])
+    except Exception:
+        return False
+    imgs = first.get("images") or []
+    if not imgs:
+        return False
+    for x in imgs:
+        s = str(x)
+        if Path(s).is_absolute() or s.startswith(("http://", "https://", "file:")):
+            continue
+        return False
+    return True
+
+
 def _multimodal_complete(d: Path) -> bool:
-    """多模态目录完整 = train.jsonl/dataset.json 有效且 images/ 下存在占位图"""
+    """多模态目录完整 = train.jsonl/dataset.json 有效、images 为绝对路径且占位图全部有效"""
     if not _dataset_complete(d):
         return False
+    if not _multimodal_rows_abs(d):
+        return False
     img_dir = d / "images"
-    return img_dir.is_dir() and any(img_dir.glob("*.png"))
+    if not img_dir.is_dir():
+        return False
+    pngs = list(img_dir.glob("*.png"))
+    if not pngs:
+        return False
+    return all(_png_ok(p) for p in pngs)
 
 
 def ensure_demo_datasets(root: Optional[Path], samples: int = 200) -> List[str]:
@@ -824,7 +914,7 @@ def ensure_demo_datasets(root: Optional[Path], samples: int = 200) -> List[str]:
 
     # 2) 偏好（DPO）
     pref_dir = root / PREF_DIR_NAME
-    if not _dataset_complete(pref_dir):
+    if not (_dataset_complete(pref_dir) and _preference_rows_ok(pref_dir)):
         pref_rows = _build_preference_rows(sft_turns, samples)
         _write_jsonl(pref_dir / "train.jsonl", pref_rows)
         _write_meta(pref_dir / "dataset.json", PREF_META, len(pref_rows))
@@ -871,7 +961,7 @@ def ensure_demo_datasets(root: Optional[Path], samples: int = 200) -> List[str]:
     ocr_dir = root / OCR_DIR_NAME
     if not _multimodal_complete(ocr_dir):
         _write_multimodal_images(ocr_dir / "images", _OCR_SAMPLES)
-        ocr_rows = _build_multimodal_rows(_OCR_SAMPLES)
+        ocr_rows = _build_multimodal_rows(_OCR_SAMPLES, ocr_dir)
         _write_jsonl(ocr_dir / "train.jsonl", ocr_rows)
         _write_meta(ocr_dir / "dataset.json", OCR_META, len(ocr_rows))
         generated.append(OCR_DIR_NAME)
@@ -881,7 +971,7 @@ def ensure_demo_datasets(root: Optional[Path], samples: int = 200) -> List[str]:
     vision_dir = root / VISION_DIR_NAME
     if not _multimodal_complete(vision_dir):
         _write_multimodal_images(vision_dir / "images", _VISION_SAMPLES)
-        vision_rows = _build_multimodal_rows(_VISION_SAMPLES)
+        vision_rows = _build_multimodal_rows(_VISION_SAMPLES, vision_dir)
         _write_jsonl(vision_dir / "train.jsonl", vision_rows)
         _write_meta(vision_dir / "dataset.json", VISION_META, len(vision_rows))
         generated.append(VISION_DIR_NAME)

@@ -128,6 +128,15 @@ export interface TrainTask {
   finishedAt?: string
 }
 
+// 训练任务类型 → 对应子菜单（列表页跳详情、详情页返回、面包屑共用，保证详情页归属正确的训练任务类型）
+export const TrainTaskTypeMenuMap: Record<TrainTask['taskType'], { title: string; path: string }> = {
+  'fine-tune': { title: '模型微调', path: '/train/fine-tune' },
+  alignment: { title: '偏好对齐', path: '/train/alignment' },
+  compression: { title: '模型压缩', path: '/train/compression' },
+  pretrain: { title: '预训练', path: '/train/pretrain' },
+  scene: { title: '场景训练', path: '/train/scene' },
+}
+
 // === 模型 ===
 export type ModelType =
   | 'dialogue'

@@ -44,7 +44,8 @@ unzip model_train_upload.zip && cd model_train
 ### 2. 一键初始化（需 root/sudo，约 15~30 分钟）
 
 ```bash
-bash deploy/ubuntu/init_env.sh
+bash deploy/ubuntu/init_env.sh                 # 常规初始化
+bash deploy/ubuntu/init_env.sh --with-quant    # 额外安装全部量化框架（GPTQ/AWQ/GGUF）
 ```
 
 脚本 9 步流程：
@@ -56,6 +57,7 @@ bash deploy/ubuntu/init_env.sh
 5. **安装引擎**：
    - 有 GPU：`torch==2.10.0`（cu128，与已验证 Notebook 镜像对齐）+ `ms-swift` + `vllm`；torch 被引擎依赖解析改动时，**cu128 构建直接保留**（新版 vLLM 会按自身依赖锁定 torch 版本），仅非 cu128 构建才从 cu128 index 恢复；
    - 无 GPU：`torch`（CPU 版）+ `ms-swift`，并把生成的 `.env` 中 `TRAIN_EXECUTION_MODE` 设为 `mock`；
+   - **量化框架**（模型压缩向导依赖）：GPU 环境默认安装 `bitsandbytes`（bnb 4/8bit 量化）；`--with-quant` 时额外安装 `auto-gptq`/`optimum`（GPTQ）、`autoawq`（AWQ）、`llama-cpp-python`（GGUF）；任一安装失败不影响初始化，可稍后补装（见下方「量化框架补装」）；
 6. **构建前端**（npm install + npm run build → `web-ui/dist`）；
 7. **生成 `backend/.env`**（从 `.env.ubuntu` 复制）+ 创建 `backend/workspace/{models,datasets}`；配置了 `SEED_MODEL_ID` 时自动下载默认模型（约 0.5~1GB）并**录入模型库**（我的模型库 / 模型库广场可见）；
 8. **验证后端模块导入**（`test_import.py`）；
@@ -64,6 +66,18 @@ bash deploy/ubuntu/init_env.sh
 > **无 GPU / 驱动未装**：`nvidia-smi` 不可用时会自动降级 mock 并提示。装好驱动（`sudo ubuntu-drivers autoinstall` 后重启，或 `--install-driver` 参数自动装）后，改回 `backend/.env` 的 `TRAIN_EXECUTION_MODE=auto` 并重跑 `init_env.sh` 即可升级为真实模式。
 >
 > **驱动版本注意**：CUDA 12.8（cu128）需要驱动 ≥ 570。驱动较旧（如 550~570）时改用 `CUDA_VERSION=cu124 TORCH_VERSION=2.9.0 bash deploy/ubuntu/init_env.sh`。
+
+> **量化框架补装**：已部署环境若压缩任务提示依赖缺失，无需重跑整初始化脚本，按需补装即可：
+>
+> ```bash
+> bash deploy/ubuntu/install_quant_engines.sh bnb    # bitsandbytes
+> bash deploy/ubuntu/install_quant_engines.sh gptq   # auto-gptq + optimum
+> bash deploy/ubuntu/install_quant_engines.sh awq    # autoawq
+> bash deploy/ubuntu/install_quant_engines.sh gguf   # llama-cpp-python
+> bash deploy/ubuntu/install_quant_engines.sh all    # 全部
+> ```
+>
+> 平台压缩任务启动前会自动预检依赖，缺哪个库会直接在任务日志中给出对应安装命令，无需手动排查。
 
 ### 3. 真实模型：自动下载并录入模型库（真实训练/推理必需）
 

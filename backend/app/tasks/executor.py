@@ -10,6 +10,7 @@ Celery worker 与 API 本地调度共用本模块，保证执行逻辑一致。
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import os
 import random
@@ -257,6 +258,16 @@ async def _run_mock_training(session, writer, task, hyper: Dict[str, Any]) -> Tu
     await writer.flush()
     await session.commit()
     return True, None
+
+
+# 量化方法 → 引擎依赖（swift export 运行时要求）。缺失时 swift 会在参数解析阶段
+# 报 PackageNotFoundError 之类的晦涩错误，这里在任务启动前预检并给出安装指引。
+_QUANT_ENGINE_DEPS: Dict[str, Dict[str, Any]] = {
+    "bnb": {"packages": ("bitsandbytes",), "install": "pip install bitsandbytes"},
+    "awq": {"packages": ("awq",), "install": "pip install autoawq"},
+    "gptq": {"packages": ("auto_gptq", "optimum"), "install": "pip install auto-gptq optimum"},
+    "gguf": {"packages": ("llama_cpp",), "install": "pip install llama-cpp-python"},
+}
 
 
 async def _run_mock_export(session, writer, task, hyper: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
@@ -1000,10 +1011,15 @@ async def run_training(task_id: str) -> str:
                 (hyper.get("training_method") or "").lower() == "lora"
                 or (task.sub_type or "").lower().find("lora") >= 0
             )
-            # LoRA 微调：补充 tuner_type + lora 目标模块，否则 swift 不会启用 LoRA
+            # LoRA 微调：补充 tuner_type + lora 目标模块，否则 swift 不会启用 LoRA。
+            # 若超参已显式配置目标模块（如场景模板的 target_modules=all-linear）
+            # 则不重复注入 lora_target_modules，避免新旧参数名同时出现在命令中
+            # （当前 swift 只认 --target_modules，--lora_target_modules 会导致
+            # argparse remaining_argv 报错、训练无法启动）。
             if not is_export and is_lora:
                 hyper.setdefault("tuner_type", "lora")
-                hyper.setdefault("lora_target_modules", "all-linear")
+                if "target_modules" not in hyper and "lora_target_modules" not in hyper:
+                    hyper["lora_target_modules"] = "all-linear"
             # 冻结微调：注入 tuner_type=freeze（3.x/4.x 由 _resolve_flag 自动改名为 --train_type freeze），
             # 冻结策略参数（如 trainable_layers / freeze_parameters）可由页面 KV 超参透传
             is_freeze = (
@@ -1057,6 +1073,24 @@ async def run_training(task_id: str) -> str:
                         await session.commit()
                         return "quant_bits_invalid"
                     params["quant_bits"] = qb_int
+                # 量化引擎依赖预检：swift 在参数解析阶段就会 import 对应量化库，
+                # 缺失时报 PackageNotFoundError 等晦涩错误；这里启动前给出明确指引。
+                # mock 模式下无需检测（不真实执行）。
+                if exec_mode() == "real":
+                    dep = _QUANT_ENGINE_DEPS.get(quant_method)
+                    if dep:
+                        missing = [p for p in dep["packages"] if importlib.util.find_spec(p) is None]
+                        if missing:
+                            task.status = "failed"
+                            task.error_message = (
+                                f"量化方法 {quant_method.upper()} 依赖库未安装: {', '.join(missing)}。"
+                                f"请在 GPU 服务器执行: {dep['install']}（需对应 CUDA 版本），然后重试该任务"
+                            )
+                            task.finished_at = datetime.now()
+                            await writer.log(f"训练失败: {task.error_message}", level="ERROR")
+                            await writer.flush()
+                            await session.commit()
+                            return "quant_engine_missing"
                 if quant_method in ("gptq", "awq") and not calib_path:
                     task.status = "failed"
                     task.error_message = (

@@ -45,7 +45,7 @@ import { ArrowDown } from '@element-plus/icons-vue'
 import PageHeaderCard from '@/components/common/PageHeaderCard.vue'
 import SearchFilter from '@/components/common/SearchFilter.vue'
 import DataTable, { type ColumnConfig } from '@/components/common/DataTable.vue'
-import { TaskStatusMap, TaskStatusColorMap } from '@/types'
+import { TaskStatusMap, TaskStatusColorMap, TrainTaskTypeMenuMap } from '@/types'
 import { getTrainTaskList, deleteTrainTask, submitTrainTask } from '@/api/training'
 
 const router = useRouter()
@@ -104,7 +104,7 @@ function goEdit(row: any) {
 }
 
 function goDetail(row: any) {
-  router.push(`/train/task/${row.id}`)
+  router.push({ path: `/train/task/${row.id}`, query: { from: TrainTaskTypeMenuMap.scene.path } })
 }
 
 async function handleAction(cmd: string, row: any) {

@@ -5,6 +5,8 @@
 #   bash deploy/ubuntu/init_env.sh                      # 常规初始化
 #   sudo bash deploy/ubuntu/init_env.sh                 # 当前用户无 sudo 时用 root 执行
 #   bash deploy/ubuntu/init_env.sh --install-driver     # 同时自动安装 NVIDIA 驱动（需重启后重跑）
+#   bash deploy/ubuntu/init_env.sh --with-quant         # 额外安装全部量化框架（GPTQ/AWQ/GGUF，编译较重；
+#                                                       #   bnb/bitsandbytes 默认随 GPU 环境安装）
 #
 # 说明（与 ModelScope Notebook 环境的差异适配）：
 #   - Ubuntu 24.04 默认 Python 3.12，且 PEP 668 禁止向系统 Python pip 安装
@@ -44,9 +46,11 @@ else
 fi
 
 INSTALL_DRIVER=0
+WITH_QUANT=0
 for arg in "$@"; do
   case "$arg" in
     --install-driver) INSTALL_DRIVER=1 ;;
+    --with-quant) WITH_QUANT=1 ;;
   esac
 done
 
@@ -300,6 +304,40 @@ if [ "$HAS_GPU" -eq 1 ]; then
   fi
   echo "    ms-swift: $("$PY" -c 'import swift;print(getattr(swift, \"__version__\", \"?\"))' 2>/dev/null || echo '?')"
   echo "    vllm:     $("$PY" -m vllm --version 2>/dev/null || echo '?')"
+
+  # ---------- 量化框架（模型压缩向导依赖；按需安装） ----------
+  # 每种量化方法需要对应后端框架（缺失时压缩任务会给出明确安装指引）：
+  #   bnb → bitsandbytes（默认安装，最常用）；gptq → auto-gptq+optimum；
+  #   awq → autoawq；gguf → llama-cpp-python（后三者编译较重，用 --with-quant 全装）
+  echo "==> [5.5] 安装量化框架"
+  if [ -n "$PIP_INDEX_URL" ]; then
+    "$PIP" install --no-cache-dir bitsandbytes --index-url "$PIP_INDEX_URL" || {
+      echo "    [WARN] bitsandbytes 安装失败，可稍后执行: bash deploy/ubuntu/install_quant_engines.sh bnb"
+    }
+  else
+    "$PIP" install --no-cache-dir bitsandbytes || {
+      echo "    [WARN] bitsandbytes 安装失败，可稍后执行: bash deploy/ubuntu/install_quant_engines.sh bnb"
+    }
+  fi
+  echo "    bitsandbytes: $("$PY" -c 'import bitsandbytes;print(bitsandbytes.__version__)' 2>/dev/null || echo '未安装')"
+  if [ "$WITH_QUANT" -eq 1 ]; then
+    echo "    安装 GPTQ / AWQ / GGUF 量化框架（编译较重，视网络可能较久）..."
+    # auto-gptq/autoawq 编译 CUDA 扩展时需复用 venv 内刚装好的 torch：
+    # pip 默认 PEP 517 隔离构建环境不含 torch（报 No module named 'torch'），
+    # 故对这类库使用 --no-build-isolation。
+    "$PIP" install --no-cache-dir setuptools wheel ninja || true
+    if [ -n "$PIP_INDEX_URL" ]; then
+      "$PIP" install --no-cache-dir auto-gptq --no-build-isolation --index-url "$PIP_INDEX_URL" || echo "    [WARN] auto-gptq 安装失败（GPTQ 量化不可用，可补装: bash deploy/ubuntu/install_quant_engines.sh gptq）"
+      "$PIP" install --no-cache-dir optimum --index-url "$PIP_INDEX_URL" || true
+      "$PIP" install --no-cache-dir autoawq --no-build-isolation --index-url "$PIP_INDEX_URL" || echo "    [WARN] autoawq 安装失败（AWQ 量化不可用，可补装: bash deploy/ubuntu/install_quant_engines.sh awq）"
+      "$PIP" install --no-cache-dir llama-cpp-python --index-url "$PIP_INDEX_URL" || echo "    [WARN] llama-cpp-python 安装失败（GGUF 导出不可用，可补装: bash deploy/ubuntu/install_quant_engines.sh gguf）"
+    else
+      "$PIP" install --no-cache-dir auto-gptq --no-build-isolation || echo "    [WARN] auto-gptq 安装失败（GPTQ 量化不可用，可补装: bash deploy/ubuntu/install_quant_engines.sh gptq）"
+      "$PIP" install --no-cache-dir optimum || true
+      "$PIP" install --no-cache-dir autoawq --no-build-isolation || echo "    [WARN] autoawq 安装失败（AWQ 量化不可用，可补装: bash deploy/ubuntu/install_quant_engines.sh awq）"
+      "$PIP" install --no-cache-dir llama-cpp-python || echo "    [WARN] llama-cpp-python 安装失败（GGUF 导出不可用，可补装: bash deploy/ubuntu/install_quant_engines.sh gguf）"
+    fi
+  fi
 else
   echo "    未检测到 GPU：安装 torch CPU 版 + ms-swift（不装 vLLM）；执行模式将设为 mock"
   "$PIP" install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu

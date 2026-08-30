@@ -53,6 +53,16 @@ class SwiftEngineAdapter:
         "teacher_model", "epochs",          # 演示版不支持蒸馏，仅入库回显
     }
 
+    # 训练专用超参：swift export / 量化任务不识别，透传会报 remaining_argv。
+    # （quant_bits / group_size / calib_dataset / calib_samples 等 export 合法参数不在此列）
+    TRAIN_ONLY_KEYS = frozenset({
+        "learning_rate", "num_train_epochs", "batch_size", "per_device_train_batch_size",
+        "max_length", "lora_rank", "lora_alpha", "lora_target_modules",
+        "target_modules", "tuner_type", "train_type", "gradient_accumulation_steps",
+        "warmup_ratio", "warmup_steps", "logging_steps", "save_steps",
+        "eval_steps", "eval_strategy", "weight_decay", "freeze_vit", "max_pixels",
+    })
+
     # 参数名映射（前端 → Swift 参数名；最终以运行时 `swift <子命令> --help` 探测结果为准，
     # _resolve_flag 会按需把下划线转连字符、或映射到 2.x/3.x/4.x 的改名参数）
     PARAM_MAP = {
@@ -87,6 +97,22 @@ class SwiftEngineAdapter:
     _swift_version_cache: Optional[str] = None
     # vLLM CLI 子命令缓存（vllm --help）
     _vllm_subcommands_cache: Optional[Set[str]] = None
+
+    # 同一参数的跨版本名字（组内互斥，第一个为现代标准名/首选）。
+    # 与 renamed 不同：renamed 只是候选列表，`flag in opts` 命中时仍可能返回被
+    # help 文本误扫到的旧参数名（如帮助中"已废弃的 --lora_target_modules"这类
+    # 描述性文字），导致新旧参数名同时透传、argparse 报 remaining_argv。
+    # 别名组在探测到组内任何名字时，只要首选名存在就强制返回首选名。
+    _FLAG_ALIAS_GROUPS: Dict[str, Tuple[str, ...]] = {
+        "--lora_target_modules": (
+            "--target_modules", "--lora_target_modules",
+            "--lora-target-modules", "--target-modules",
+        ),
+        "--target_modules": (
+            "--target_modules", "--lora_target_modules",
+            "--lora-target-modules", "--target-modules",
+        ),
+    }
 
     # 已知 swift 顶层子命令令牌（ms-swift 各版本 --help 布局差异大，做兜底扫描）
     _KNOWN_SUBCOMMANDS = (
@@ -276,6 +302,18 @@ class SwiftEngineAdapter:
             return flag
 
         opts = cls._swift_help_opts(subcommand)
+        # 跨版本改名参数的别名组：组内互斥。help 探测可能把帮助文本中的描述性
+        # 文字（如"已废弃的 --lora_target_modules"）误扫为选项，使 `flag in opts`
+        # 命中旧参数名并原样透传，而当前 swift 实际只接受新名，导致 argparse
+        # remaining_argv 报错。只要组内现代标准名存在，一律返回标准名。
+        group = cls._FLAG_ALIAS_GROUPS.get(flag)
+        if group:
+            preferred = group[0]
+            if opts:
+                for cand in group:
+                    if cand in opts:
+                        return preferred if preferred in opts else cand
+            return preferred  # 探测失败时同样回退现代标准名
         if opts and flag in opts:
             return flag
         # 下划线 → 连字符（如 --learning_rate → --learning-rate）
@@ -295,8 +333,12 @@ class SwiftEngineAdapter:
             "--rlhf_type": ("--rlhf-type",),
             "--quant_method": ("--quant-method",),
             "--quant_bits": ("--quant-bits",),
-            "--calib_dataset": ("--calib-dataset", "--calib_dataset"),
-            "--calib_samples": ("--calib-samples",),
+            # swift 4.x export 的 GPTQ/AWQ 量化校准数据集经 --dataset 传入
+            # （--calib-dataset 仅老版本识别；传错会报 "Please input the quant dataset"）
+            "--calib_dataset": ("--dataset", "--calib-dataset", "--calib_dataset"),
+            # swift export 的量化校准样本数为 --quant_n_samples（默认 256）；
+            # --calib-samples/--calib_samples 是旧/未识别名，透传会 remaining_argv
+            "--calib_samples": ("--quant_n_samples", "--calib-samples", "--calib_samples"),
         }
         candidates = renamed.get(flag, ())
         if opts:
@@ -440,14 +482,18 @@ class SwiftEngineAdapter:
             rendered_text = " ".join(parts)
 
         # 超参数映射（平台内部字段跳过，仅入库回显；模板中已出现的参数跳过，避免重复传参）
+        seen_flags: Set[str] = set()
         for key, value in hyper_params.items():
             # 平台内部字段：仅用于页面选择/入库回显或控制逻辑，不出现在 swift 命令中
             if key in cls.PLATFORM_INTERNAL_KEYS:
                 continue
             swift_param = cls.PARAM_MAP.get(key)
             flag = cls._resolve_flag(swift_param or f"--{key}", cmd_name)
-            if flag in rendered_text:
+            # 已出现在基础命令中，或本批超参中已生成过同一 flag
+            # （如新旧参数名 lora_target_modules/target_modules 归一化后重复），跳过避免重复传参
+            if flag in rendered_text or flag in seen_flags:
                 continue
+            seen_flags.add(flag)
             parts.extend([flag, str(value)])
 
         # 环境变量不再以 --env 追加到命令行（ms-swift 各版本对该参数支持不一致，且
@@ -768,8 +814,9 @@ class SwiftEngineAdapter:
             cmd.extend([cls._resolve_flag("--output_dir", cmd_name), output_dir])
         if params:
             for key, value in params.items():
-                # 页面展示字段（剪枝/蒸馏/教师模型等）仅入库回显，swift export 不识别，透传会报错
-                if key in cls.EXPORT_INTERNAL_KEYS:
+                # 页面展示字段（剪枝/蒸馏/教师模型等）与训练专用超参（learning_rate 等）
+                # swift export 不识别，透传会报错或 remaining_argv，统一过滤
+                if key in cls.EXPORT_INTERNAL_KEYS or key in cls.TRAIN_ONLY_KEYS:
                     continue
                 flag = cls._resolve_flag(f"--{key}", cmd_name)
                 if flag in cmd:

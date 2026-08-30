@@ -76,6 +76,7 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { HomeFilled, Bell, UserFilled, ArrowDown, User, SwitchButton } from '@element-plus/icons-vue'
 import { useUserStore, useNotificationStore } from '@/stores'
+import { TrainTaskTypeMenuMap } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -95,6 +96,15 @@ const breadcrumbs = computed(() => {
   const currentRoute = matched[matched.length - 1]
   if (currentRoute?.meta?.parent) {
     const parent = currentRoute.meta.parent as { title: string; path: string }
+
+    // 训练任务详情共用路由 /train/task/:id：根据来源 query.from（对应训练子菜单列表路径）展示对应父级面包屑
+    if (route.name === 'TrainTaskDetail') {
+      const from = route.query.from as string | undefined
+      const trainMenu = from && Object.values(TrainTaskTypeMenuMap).find((m) => m.path === from)
+      const parentCrumb = trainMenu || parent
+      result.splice(result.length - 1, 0, { title: parentCrumb.title, path: parentCrumb.path })
+      return result
+    }
 
     // 来源上下文映射：当 query.from 值对应的 parent 存在时，替换父级面包屑
     const fromSource = route.query.from as string | undefined

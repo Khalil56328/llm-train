@@ -12,6 +12,7 @@ venv/
 *.db
 *.log
 storage/
+workspace/
 
 # ---- 前端 ----
 node_modules/

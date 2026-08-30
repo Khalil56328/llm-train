@@ -286,10 +286,23 @@ def write_dataset_meta(ds_dir: Path, name: str, data_type: str, category: str,
     log(f"已生成元信息: {ds_dir / 'dataset.json'}（{sample_count} 条）")
 
 
+def _pref_file_ok(pref_dir: Path) -> bool:
+    """偏好数据集格式校验：swift 4.x 要求 messages(chosen) + rejected_messages/rejected_response。
+    旧版 {chosen/rejected} 字段不被识别（报 inputs.rejected is None），需视为缺失重建。"""
+    try:
+        jl = pref_dir / "train.jsonl"
+        if not jl.is_file() or jl.stat().st_size == 0:
+            return False
+        first = json.loads(jl.read_text(encoding="utf-8").splitlines()[0])
+        return bool(first.get("messages") and
+                    (first.get("rejected_messages") or first.get("rejected_response")))
+    except Exception:
+        return False
+
+
 def build_preference(sft_turns: list, pref_dir: Path, samples: int, force: bool) -> None:
     """由 SFT 对话样本生成 chosen/rejected 偏好对（演示用，rejected 为截断/敷衍回复）"""
-    if pref_dir.exists() and not force and (pref_dir / "train.jsonl").exists() \
-            and (pref_dir / "train.jsonl").stat().st_size > 0:
+    if pref_dir.exists() and not force and _pref_file_ok(pref_dir):
         log(f"偏好数据集已存在，跳过: {pref_dir}")
         return
     if not sft_turns:
@@ -305,8 +318,8 @@ def build_preference(sft_turns: list, pref_dir: Path, samples: int, force: bool)
             rejected_content = "抱歉，我暂时无法回答这个问题。" if len(assistant_msg["content"]) > 10 \
                 else assistant_msg["content"][: max(1, len(assistant_msg["content"]) // 2)]
             row = {
-                "chosen": [user_msg, assistant_msg],
-                "rejected": [user_msg, {"role": "assistant", "content": rejected_content}],
+                "messages": [user_msg, assistant_msg],
+                "rejected_messages": [user_msg, {"role": "assistant", "content": rejected_content}],
             }
             out.write(json.dumps(row, ensure_ascii=False) + "\n")
             n += 1
@@ -444,7 +457,8 @@ def build_multimodal(multimodal_dir: Path, samples: list, name: str, desc: str,
         log("后端生成器不可用，跳过多模态演示数据集（后端启动时会自动生成）")
         return
     _BACKEND_GEN._write_multimodal_images(img_dir, samples)
-    rows = _BACKEND_GEN._build_multimodal_rows(samples)
+    # images 使用绝对路径（MS-Swift 推荐；相对路径按其实现基于进程 CWD 解析会加载失败）
+    rows = _BACKEND_GEN._build_multimodal_rows(samples, multimodal_dir)
     multimodal_dir.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as out:
         for r in rows:

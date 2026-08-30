@@ -56,7 +56,7 @@
         :show-pagination="false"
       >
         <template #actions="{ row }">
-          <el-button type="primary" link size="small" @click="viewDetail(row.id)">详情</el-button>
+          <el-button type="primary" link size="small" @click="viewDetail(row)">详情</el-button>
         </template>
       </DataTable>
     </div>
@@ -67,7 +67,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Document, Cpu, Connection, DataAnalysis, CircleCheck, TrendCharts, ArrowRight } from '@element-plus/icons-vue'
-import { TaskStatusMap, TaskStatusColorMap } from '@/types'
+import { TaskStatusMap, TaskStatusColorMap, TrainTaskTypeMenuMap } from '@/types'
 import DataTable from '@/components/common/DataTable.vue'
 import { getTrainTaskList, getTaskStats } from '@/api/training'
 import { getModelStats } from '@/api/model'
@@ -145,8 +145,9 @@ onMounted(() => {
   loadRecentTasks()
 })
 
-function viewDetail(id: string) {
-  router.push(`/train/task/${id}`)
+function viewDetail(row: any) {
+  const menu = TrainTaskTypeMenuMap[row?.taskType as keyof typeof TrainTaskTypeMenuMap]
+  router.push({ path: `/train/task/${row.id}`, query: { from: menu?.path || '/train/fine-tune' } })
 }
 </script>
 

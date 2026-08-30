@@ -121,7 +121,7 @@ import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/compon
 import { CanvasRenderer } from 'echarts/renderers'
 import PageHeaderCard from '@/components/common/PageHeaderCard.vue'
 import DataTable, { type ColumnConfig } from '@/components/common/DataTable.vue'
-import { TaskStatusMap, TaskStatusColorMap } from '@/types'
+import { TaskStatusMap, TaskStatusColorMap, TrainTaskTypeMenuMap } from '@/types'
 import {
   getTaskDetail,
   getTaskLogs,
@@ -251,7 +251,21 @@ const lrChartOption = computed(() => ({
   }],
 }))
 
-function goBack() { router.back() }
+// 返回：优先回到来源列表页（query.from），其次按任务类型推导对应列表，最后回退浏览器历史
+function goBack() {
+  const from = route.query.from as string | undefined
+  const fromMenu = from && Object.values(TrainTaskTypeMenuMap).find((m) => m.path === from)
+  if (fromMenu) {
+    router.push(fromMenu.path)
+    return
+  }
+  const menu = TrainTaskTypeMenuMap[task.taskType as keyof typeof TrainTaskTypeMenuMap]
+  if (menu) {
+    router.push(menu.path)
+    return
+  }
+  router.back()
+}
 
 async function loadDetail() {
   try {
@@ -284,6 +298,13 @@ async function loadDetail() {
       outputModelName: data.outputModelName || '',
       createdBy: data.createdBy || '',
     })
+    // 详情页归属对应训练任务类型：无来源参数时按任务类型补充，保证面包屑与返回正确
+    if (!route.query.from) {
+      const menu = TrainTaskTypeMenuMap[data.taskType as keyof typeof TrainTaskTypeMenuMap]
+      if (menu) {
+        router.replace({ path: route.path, query: { ...route.query, from: menu.path } })
+      }
+    }
   } catch (e) {
     ElMessage.error('加载任务详情失败')
   }

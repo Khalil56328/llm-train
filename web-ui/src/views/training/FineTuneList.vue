@@ -47,7 +47,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeaderCard from '@/components/common/PageHeaderCard.vue'
 import SearchFilter from '@/components/common/SearchFilter.vue'
 import DataTable, { type ColumnConfig } from '@/components/common/DataTable.vue'
-import { TaskStatusMap, TaskStatusColorMap } from '@/types'
+import { TaskStatusMap, TaskStatusColorMap, TrainTaskTypeMenuMap } from '@/types'
 import { getTrainTaskList, deleteTrainTask, submitTrainTask } from '@/api/training'
 
 const router = useRouter()
@@ -92,7 +92,7 @@ async function fetchData() {
 function handleReset() { searchKeyword.value = ''; filterStatus.value = ''; fetchData() }
 function goCreate() { router.push('/train/fine-tune/create') }
 function goEdit(row: any) { router.push({ path: '/train/fine-tune/create', query: { id: row.id } }) }
-function goDetail(row: any) { router.push(`/train/task/${row.id}`) }
+function goDetail(row: any) { router.push({ path: `/train/task/${row.id}`, query: { from: TrainTaskTypeMenuMap['fine-tune'].path } }) }
 async function handleAction(cmd: string, row: any) {
   if (cmd === 'edit') {
     goEdit(row)
