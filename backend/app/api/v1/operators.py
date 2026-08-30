@@ -19,8 +19,8 @@ router = APIRouter()
 # ========== 算子广场（静态路由需在动态路由前注册） ==========
 @router.get("/plaza/search")
 async def plaza_operators(
-    page_index: int = Query(1, ge=1),
-    page_size: int = Query(12, ge=1, le=100),
+    page_index: int = Query(1, ge=1, alias="pageIndex"),
+    page_size: int = Query(12, ge=1, le=100, alias="pageSize"),
     keyword: str = Query(None),
     category: str = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -38,8 +38,8 @@ async def plaza_operators(
 # ========== 算子 CRUD ==========
 @router.get("")
 async def list_operators(
-    page_index: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_index: int = Query(1, ge=1, alias="pageIndex"),
+    page_size: int = Query(20, ge=1, le=100, alias="pageSize"),
     keyword: str = Query(None),
     category: str = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -211,8 +211,8 @@ async def delete_version_nested(
 # ========== 镜像 ==========
 @router.get("/images/search")
 async def search_images(
-    page_index: int = Query(1),
-    page_size: int = Query(10),
+    page_index: int = Query(1, alias="pageIndex"),
+    page_size: int = Query(10, alias="pageSize"),
     keyword: str = Query(None),
     resource_type: str = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -231,8 +231,8 @@ async def search_images(
 # 前端镜像选择弹框调用的是 /images/list（已迁移至运维中心，此处兼容保留）
 @router.get("/images/list")
 async def list_images(
-    page_index: int = Query(1),
-    page_size: int = Query(10),
+    page_index: int = Query(1, alias="pageIndex"),
+    page_size: int = Query(10, alias="pageSize"),
     keyword: str = Query(None),
     resource_type: str = Query(None),
     db: AsyncSession = Depends(get_db),

@@ -30,11 +30,11 @@ def _load_report(eval_id: str) -> dict:
 
 @router.get("")
 async def list_evaluations(
-    page_index: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_index: int = Query(1, ge=1, alias="pageIndex"),
+    page_size: int = Query(20, ge=1, le=100, alias="pageSize"),
     keyword: str = Query(None),
     status: str = Query(None),
-    eval_type: str = Query(None),
+    eval_type: str = Query(None, alias="evalType"),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
@@ -180,9 +180,9 @@ async def get_eval_report(
 @router.get("/{eval_id}/items")
 async def list_eval_items(
     eval_id: str,
-    page_index: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    is_evaluated: bool = Query(None),
+    page_index: int = Query(1, ge=1, alias="pageIndex"),
+    page_size: int = Query(20, ge=1, le=100, alias="pageSize"),
+    is_evaluated: bool = Query(None, alias="isEvaluated"),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):

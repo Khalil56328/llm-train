@@ -43,8 +43,8 @@ def _cleanup_storage(files) -> None:
 # ========== 广场（静态路由放在动态路由前） ==========
 @router.get("/plaza/search")
 async def plaza_models(
-    page_index: int = Query(1, ge=1),
-    page_size: int = Query(12, ge=1, le=100),
+    page_index: int = Query(1, ge=1, alias="pageIndex"),
+    page_size: int = Query(12, ge=1, le=100, alias="pageSize"),
     keyword: str = Query(None),
     type: str = Query(None),
     spec: str = Query(None),
@@ -312,8 +312,8 @@ async def download_version_files(
 # ========== 模型主表（动态路由放在后面） ==========
 @router.get("")
 async def list_models(
-    page_index: int = Query(1, ge=1),
-    page_size: int = Query(12, ge=1, le=100),
+    page_index: int = Query(1, ge=1, alias="pageIndex"),
+    page_size: int = Query(12, ge=1, le=100, alias="pageSize"),
     keyword: str = Query(None),
     type: str = Query(None),
     spec: str = Query(None),

@@ -38,8 +38,8 @@ async def _validate_operator_params(db: AsyncSession, task: Dict) -> Optional[st
 
 @router.get("")
 async def list_tasks(
-    page_index: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_index: int = Query(1, ge=1, alias="pageIndex"),
+    page_size: int = Query(20, ge=1, le=100, alias="pageSize"),
     keyword: str = Query(None),
     status: str = Query(None),
     # 兼容前端驼峰 taskType 与外部蛇形 task_type 两种传参

@@ -137,8 +137,8 @@ async def _convert_csv_to_jsonl(
 
 @router.get("")
 async def list_datasets(
-    page_index: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_index: int = Query(1, ge=1, alias="pageIndex"),
+    page_size: int = Query(20, ge=1, le=100, alias="pageSize"),
     keyword: str = Query(None),
     category: str = Query(None),
     data_type: str = Query(None),
@@ -320,11 +320,11 @@ async def delete_version(
 @router.get("/{dataset_id}/files")
 async def list_files(
     dataset_id: str,
-    page_index: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
+    page_index: int = Query(1, ge=1, alias="pageIndex"),
+    page_size: int = Query(10, ge=1, le=100, alias="pageSize"),
     keyword: str = Query(None),
     status: str = Query(None),
-    version_id: str = Query(None, description="按数据集版本过滤"),
+    version_id: str = Query(None, alias="versionId", description="按数据集版本过滤"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -345,7 +345,7 @@ async def list_files(
 @router.get("/{dataset_id}/files/stats")
 async def get_file_stats(
     dataset_id: str,
-    version_id: str = Query(None, description="按数据集版本过滤"),
+    version_id: str = Query(None, alias="versionId", description="按数据集版本过滤"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -359,7 +359,7 @@ async def get_file_stats(
 @router.get("/{dataset_id}/files/collect-tasks")
 async def list_collect_tasks(
     dataset_id: str,
-    version_id: str = Query(None, description="按数据集版本过滤"),
+    version_id: str = Query(None, alias="versionId", description="按数据集版本过滤"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -715,8 +715,8 @@ async def download_file(
 # ========== 广场 ==========
 @router.get("/plaza/search")
 async def plaza_datasets(
-    page_index: int = Query(1),
-    page_size: int = Query(12),
+    page_index: int = Query(1, alias="pageIndex"),
+    page_size: int = Query(12, alias="pageSize"),
     keyword: str = Query(None),
     dataset_type: str = Query(None),
     db: AsyncSession = Depends(get_db),

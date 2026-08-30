@@ -12,8 +12,8 @@ router = APIRouter()
 
 @router.get("")
 async def get_notifications(
-    page_index: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_index: int = Query(1, ge=1, alias="pageIndex"),
+    page_size: int = Query(20, ge=1, le=100, alias="pageSize"),
     level: str = Query(None),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
