@@ -1,14 +1,26 @@
 """模型评测服务"""
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
+from app.models.dataset import DatasetVersion
 from app.models.evaluation import EvaluationTask, EvalItem
+
+
+def _storage_dir() -> Path:
+    """本地存储根目录（与 executor.storage_dir 一致：评测报告所在处）"""
+    base = Path(getattr(settings, "LOCAL_STORAGE_DIR", "storage"))
+    if not base.is_absolute():
+        base = Path(__file__).resolve().parent.parent.parent / base
+    return base
 
 
 def _uuid() -> str:
@@ -59,7 +71,15 @@ class EvalService:
     async def get_evaluation(self, eval_id: str) -> Optional[Dict]:
         result = await self.db.execute(select(EvaluationTask).where(EvaluationTask.id == eval_id))
         e = result.scalar_one_or_none()
-        return _eval_to_dict(e) if e else None
+        if not e:
+            return None
+        d = _eval_to_dict(e)
+        # dataset_version 入库为版本 ID，此处解析为版本号（如 v1）展示
+        if d.get("datasetVersion"):
+            ver = await self.db.get(DatasetVersion, d["datasetVersion"])
+            if ver is not None:
+                d["datasetVersion"] = ver.version
+        return d
 
     async def create_evaluation(self, data: Dict, *, created_by: str) -> Dict:
         e = EvaluationTask(
@@ -83,40 +103,8 @@ class EvalService:
         self.db.add(e)
         await self.db.flush()
         await self.db.refresh(e)
-        # 如果是人工评测，创建评测项
-        if e.eval_type == "manual":
-            await self._create_manual_items(e.id, data)
+        # 人工评测项由任务执行器在生成真实模型回复后创建（见 executor.run_evaluation）
         return _eval_to_dict(e)
-
-    async def _create_manual_items(self, eval_id: str, data: Dict):
-        """创建人工评测项（模拟数据）"""
-        prompts = data.get("evalPrompts", [])
-        if not prompts:
-            # 生成模拟评测项
-            for i in range(5):
-                item = EvalItem(
-                    id=_uuid(),
-                    eval_id=eval_id,
-                    prompt=f"示例问题 {i+1}：请解释什么是大语言模型？",
-                    reference_response=f"参考回答 {i+1}：大语言模型是一种基于深度学习的自然语言处理模型...",
-                    model_response=f"模型回答 {i+1}：大语言模型是经过大规模文本数据训练的AI模型...",
-                    score=None,
-                    is_evaluated=False,
-                )
-                self.db.add(item)
-        else:
-            for p in prompts:
-                item = EvalItem(
-                    id=_uuid(),
-                    eval_id=eval_id,
-                    prompt=p.get("prompt", ""),
-                    reference_response=p.get("referenceResponse", ""),
-                    model_response=p.get("modelResponse", ""),
-                    score=None,
-                    is_evaluated=False,
-                )
-                self.db.add(item)
-        await self.db.flush()
 
     async def update_evaluation(self, eval_id: str, data: Dict) -> Optional[Dict]:
         result = await self.db.execute(select(EvaluationTask).where(EvaluationTask.id == eval_id))
@@ -245,26 +233,82 @@ class EvalService:
         return _item_to_dict(i)
 
     async def _update_manual_progress(self, eval_id: str):
-        """更新人工评测进度"""
+        """更新人工评测进度（模型推理阶段占 0-50%，人工评审占 50-100%）"""
         total_q = select(func.count(EvalItem.id)).where(EvalItem.eval_id == eval_id)
         done_q = select(func.count(EvalItem.id)).where(EvalItem.eval_id == eval_id, EvalItem.is_evaluated == True)
         total = (await self.db.execute(total_q)).scalar() or 1
         done = (await self.db.execute(done_q)).scalar() or 0
-        progress = int(done / total * 100)
-        # 如果全部完成，计算平均分并更新状态
+        progress = min(50 + int(done / total * 50), 99)
+        # 如果全部完成，汇总人工评分并生成评测报告
         result = await self.db.execute(select(EvaluationTask).where(EvaluationTask.id == eval_id))
         e = result.scalar_one_or_none()
         if e:
             e.progress = progress
-            if done == total and total > 0:
-                avg_result = await self.db.execute(
-                    select(func.avg(EvalItem.score)).where(EvalItem.eval_id == eval_id, EvalItem.score.isnot(None))
-                )
-                avg_score = avg_result.scalar()
-                e.score = round(float(avg_score), 2) if avg_score else None
-                e.status = "completed"
-                e.finished_at = _now()
+            if done == total and total > 0 and e.eval_type == "manual":
+                await self._finalize_manual_report(e, eval_id, total)
             await self.db.flush()
+
+    async def _finalize_manual_report(self, e: EvaluationTask, eval_id: str, total: int):
+        """人工评审全部完成：汇总评审结果，生成评测报告文件并结束任务"""
+        rows = (await self.db.execute(
+            select(EvalItem).where(EvalItem.eval_id == eval_id).order_by(EvalItem.created_at)
+        )).scalars().all()
+        scale = e.rating_scale or 5
+        scored = [i for i in rows if i.is_evaluated and i.score is not None]
+        avg_raw = sum(i.score for i in scored) / len(scored) if scored else 0.0
+        percent = round(avg_raw / scale * 100, 1)
+        reviewers = sorted({i.evaluated_by for i in scored if i.evaluated_by})
+        samples = [
+            {
+                "prompt": i.prompt,
+                "referenceResponse": i.reference_response or "",
+                "modelResponse": i.model_response or "",
+                "score": i.score,
+                "humanScore": round(i.score / scale * 100, 1) if i.score is not None else None,
+                "evaluatedBy": i.evaluated_by,
+            }
+            for i in rows
+        ]
+        report = {
+            "evalId": e.id,
+            "name": e.name,
+            "evalType": "manual",
+            "ratingScale": scale,
+            "datasetName": e.dataset_name,
+            "deploymentName": e.deployment_name,
+            "scenes": e.scenes or [],
+            "score": round(avg_raw, 2),
+            "overallScore": percent,
+            "totalSamples": total,
+            "reviewerCount": len(reviewers),
+            "reviewers": reviewers,
+            "dimensionScores": [
+                {
+                    "dimension": "overall",
+                    "dimensionName": "人工综合评分",
+                    "weight": 1.0,
+                    "desc": "评审员按评分量级对模型回复的综合评分",
+                    "score": percent,
+                    "sampleCount": len(scored),
+                },
+            ],
+            "samples": samples,
+            "summary": (
+                f"人工评测完成：{total} 条样本、{len(reviewers)} 位评审员参与，"
+                f"平均得分 {round(avg_raw, 2)}/{scale} 分（百分制 {percent} 分）。"
+            ),
+            "generatedAt": _now().isoformat(timespec="seconds"),
+        }
+        reports_dir = _storage_dir() / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        (reports_dir / f"{e.id}.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        e.score = percent
+        e.report_url = f"/static/reports/{e.id}.json"
+        e.status = "completed"
+        e.progress = 100
+        e.finished_at = _now()
 
 
 def _eval_to_dict(e: EvaluationTask) -> Dict:

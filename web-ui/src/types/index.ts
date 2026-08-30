@@ -488,7 +488,7 @@ export interface DeployInstance {
 
 // === 评测任务 ===
 export type EvalType = 'auto' | 'manual'
-export type EvalStatus = 'pending' | 'running' | 'completed' | 'failed'
+export type EvalStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped'
 
 export const EvalTypeMap: Record<EvalType, string> = {
   auto: '自动评测',
@@ -500,6 +500,7 @@ export const EvalStatusMap: Record<EvalStatus, string> = {
   running: '执行中',
   completed: '已完成',
   failed: '执行失败',
+  stopped: '已取消',
 }
 
 export const EvalStatusColorMap: Record<EvalStatus, 'primary' | 'success' | 'warning' | 'info' | 'danger'> = {
@@ -507,6 +508,7 @@ export const EvalStatusColorMap: Record<EvalStatus, 'primary' | 'success' | 'war
   running: 'primary',
   completed: 'success',
   failed: 'danger',
+  stopped: 'warning',
 }
 
 export interface EvalMetric {
@@ -552,48 +554,83 @@ export interface EvalItem {
   createdAt: string
 }
 
-// === 评测场景 ===
-export type EvalScene = 'code' | 'alignment' | 'agent' | 'safety' | 'reasoning'
-export type ManualEvalScene = 'text-classification' | 'text-summary' | 'text-generation' | 'qa' | 'custom'
+// === 评测维度（准确性 / 流畅性 / 安全性 / 指令遵循） ===
+export type EvalScene = 'accuracy' | 'fluency' | 'safety' | 'instruction'
+export type ManualEvalScene = EvalScene
 
 export const EvalSceneMap: Record<EvalScene, string> = {
-  code: '代码',
-  alignment: '对齐',
-  agent: '智能体',
-  safety: '安全',
-  reasoning: '逻辑推理',
+  accuracy: '准确性',
+  fluency: '流畅性',
+  safety: '安全性',
+  instruction: '指令遵循',
+}
+
+/** 维度说明（创建页场景卡片 / 报告页展示） */
+export const EvalSceneDescMap: Record<EvalScene, string> = {
+  accuracy: '与数据集标准答案的一致程度',
+  fluency: '表达通顺、无语病与重复',
+  safety: '拒答有害请求、输出内容合规',
+  instruction: '按指令要求切题、完整作答',
 }
 
 export const EvalSceneIconMap: Record<EvalScene, string> = {
-  code: 'Monitor',
-  alignment: 'Aim',
-  agent: 'Cpu',
+  accuracy: 'Aim',
+  fluency: 'Promotion',
   safety: 'Lock',
-  reasoning: 'DataAnalysis',
+  instruction: 'Guide',
 }
 
-export const ManualEvalSceneMap: Record<ManualEvalScene, string> = {
-  'text-classification': '文本分类',
-  'text-summary': '文本摘要',
-  'text-generation': '文本生成',
-  'qa': '问题问答',
-  'custom': '自定义场景',
+/** 维度权重（综合得分加权：准确性40% 指令遵循25% 流畅性20% 安全性15%） */
+export const EvalSceneWeightMap: Record<EvalScene, number> = {
+  accuracy: 0.4,
+  instruction: 0.25,
+  fluency: 0.2,
+  safety: 0.15,
 }
 
-export const ManualEvalSceneIconMap: Record<ManualEvalScene, string> = {
-  'text-classification': 'Document',
-  'text-summary': 'Notebook',
-  'text-generation': 'EditPen',
-  'qa': 'ChatDotRound',
-  'custom': 'Setting',
-}
+export const ManualEvalSceneMap: Record<ManualEvalScene, string> = EvalSceneMap
+export const ManualEvalSceneIconMap: Record<ManualEvalScene, string> = EvalSceneIconMap
 
 // === 评测报告 ===
+export interface EvalDimensionScore {
+  dimension: string
+  dimensionName?: string
+  score: number
+  sampleCount?: number
+  weight?: number
+  desc?: string
+}
+
+export interface EvalSample {
+  prompt: string
+  referenceResponse?: string
+  modelResponse?: string
+  scores?: Partial<Record<EvalScene, number | null>>
+  score?: number
+  passed?: boolean
+  humanScore?: number | null
+  evaluatedBy?: string
+  notes?: Record<string, string>
+  error?: string
+}
+
 export interface EvalReport {
-  taskId: string
-  taskName: string
+  taskId?: string
+  taskName?: string
+  name?: string
+  status?: string
+  evalType?: string
+  ratingScale?: number
   overallScore: number
-  dimensionScores: { dimension: string; score: number }[]
+  scenes?: string[]
+  dimensionScores: EvalDimensionScore[]
+  samples?: EvalSample[]
+  details?: EvalSample[]
+  totalSamples?: number
+  passedCount?: number
+  reviewers?: string[]
+  summary?: string
+  generatedAt?: string
   detailUrl?: string
 }
 

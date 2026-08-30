@@ -21,13 +21,14 @@
                 :key="scene.value"
                 class="scene-card"
                 :class="{ active: form.sceneType === scene.value }"
-                @click="form.sceneType = scene.value"
+                @click="selectScene(scene.value)"
               >
                 <div class="scene-icon">
                   <el-icon :size="32"><component :is="scene.icon" /></el-icon>
                 </div>
                 <div class="scene-name">{{ scene.label }}</div>
                 <div class="scene-desc">{{ scene.desc }}</div>
+                <div v-if="scene.tip" class="scene-tip">{{ scene.tip }}</div>
               </div>
             </div>
           </div>
@@ -63,7 +64,7 @@
             <el-form-item label="训练数据集" required>
               <HierarchicalSelect v-model="form.datasetId" :data="datasetTree" placeholder="请选择数据集" />
             </el-form-item>
-            <div class="form-tip">场景训练本质为 SFT，请选择对话式训练数据集（如演示数据集 sft_self_cognition）。</div>
+            <el-alert class="dataset-tip" type="info" :closable="false" show-icon :title="datasetTip" />
           </div>
         </div>
       </div>
@@ -109,6 +110,18 @@
         <div class="form-section">
           <div class="section-title">参数配置</div>
           <div class="section-body">
+            <el-alert
+              class="preset-alert"
+              type="info"
+              :closable="false"
+              show-icon
+              :title="`已应用「${currentScene?.label || ''}」基础参数模板`"
+            >
+              <div class="preset-alert-body">
+                <span>{{ currentScene?.tip }}</span>
+                <el-button link type="primary" @click="restoreScenePreset">恢复模板参数</el-button>
+              </div>
+            </el-alert>
             <el-row :gutter="20">
               <el-col :span="8">
                 <el-form-item label="学习率">
@@ -189,7 +202,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import type { Component } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Document, ChatDotRound, Picture, Cpu } from '@element-plus/icons-vue'
@@ -225,11 +239,113 @@ const steps = [
   { step: 4, title: '资源配置', desc: '资源参数仅展示，按宿主机真实资源执行' },
 ]
 
-const sceneOptions = [
-  { value: 'ocr', label: 'OCR场景', desc: '光学字符识别，适用于文档理解、票据识别等', icon: Document },
-  { value: 'chat', label: '客服场景', desc: '智能客服对话，适用于售后、咨询等', icon: ChatDotRound },
-  { value: 'vision', label: '视觉理解场景', desc: '多模态视觉理解，适用于图像描述、VQA等', icon: Picture },
-  { value: 'code', label: '代码生成场景', desc: '代码生成与补全，适用于编程辅助等', icon: Cpu },
+interface SceneOption {
+  value: string
+  label: string
+  desc: string
+  icon: Component
+  tip: string
+  template: {
+    learningRate: string
+    epochs: number
+    batchSize: number
+    maxLength: number
+    gradAccumSteps: number
+    kvParams: { key: string; value: string }[]
+  }
+}
+
+// 场景基础参数模板：选择场景时自动预置一套行业主流的训练超参（基于 MS-Swift 多模态/纯文本 SFT 推荐配置），
+// 用户可在步骤三基于模板微调，也可一键恢复模板参数。
+const sceneOptions: SceneOption[] = [
+  {
+    value: 'ocr',
+    label: 'OCR场景',
+    desc: '光学字符识别，适用于文档理解、票据识别、版面分析等',
+    icon: Document,
+    tip: '高分辨率输入（max_pixels 1003520）+ 冻结视觉编码器 + all-linear LoRA，适配文档/票据等密集文本识别',
+    template: {
+      learningRate: '1e-4',
+      epochs: 3,
+      batchSize: 1,
+      maxLength: 8192,
+      gradAccumSteps: 16,
+      kvParams: [
+        { key: 'lora_rank', value: '8' },
+        { key: 'lora_alpha', value: '16' },
+        { key: 'target_modules', value: 'all-linear' },
+        { key: 'max_pixels', value: '1003520' },
+        { key: 'freeze_vit', value: 'true' },
+        { key: 'eval_strategy', value: 'no' },
+        { key: 'save_steps', value: '500' },
+      ],
+    },
+  },
+  {
+    value: 'chat',
+    label: '客服场景',
+    desc: '智能客服对话，适用于售后、咨询、订单物流等',
+    icon: ChatDotRound,
+    tip: '纯文本 SFT 基线：all-linear LoRA + 2048 上下文，适合快速验证对话效果',
+    template: {
+      learningRate: '1e-4',
+      epochs: 3,
+      batchSize: 2,
+      maxLength: 2048,
+      gradAccumSteps: 8,
+      kvParams: [
+        { key: 'lora_rank', value: '8' },
+        { key: 'lora_alpha', value: '16' },
+        { key: 'target_modules', value: 'all-linear' },
+        { key: 'eval_strategy', value: 'no' },
+        { key: 'save_steps', value: '500' },
+      ],
+    },
+  },
+  {
+    value: 'vision',
+    label: '视觉理解场景',
+    desc: '多模态视觉理解，适用于图像描述、视觉问答 VQA、通用视觉理解等',
+    icon: Picture,
+    tip: 'General Vision 通用视觉基线：冻结视觉编码器 + all-linear LoRA，适配图像描述 / VQA 等视觉任务',
+    template: {
+      learningRate: '1e-4',
+      epochs: 3,
+      batchSize: 2,
+      maxLength: 8192,
+      gradAccumSteps: 8,
+      kvParams: [
+        { key: 'lora_rank', value: '8' },
+        { key: 'lora_alpha', value: '16' },
+        { key: 'target_modules', value: 'all-linear' },
+        { key: 'max_pixels', value: '1003520' },
+        { key: 'freeze_vit', value: 'true' },
+        { key: 'eval_strategy', value: 'no' },
+        { key: 'save_steps', value: '500' },
+      ],
+    },
+  },
+  {
+    value: 'code',
+    label: '代码生成场景',
+    desc: '代码生成与补全，适用于编程辅助、单元测试生成等',
+    icon: Cpu,
+    tip: '代码场景建议更长上下文：max_length 4096 + lora_rank 16，兼顾生成质量与显存',
+    template: {
+      learningRate: '2e-4',
+      epochs: 3,
+      batchSize: 2,
+      maxLength: 4096,
+      gradAccumSteps: 8,
+      kvParams: [
+        { key: 'lora_rank', value: '16' },
+        { key: 'lora_alpha', value: '32' },
+        { key: 'target_modules', value: 'all-linear' },
+        { key: 'eval_strategy', value: 'no' },
+        { key: 'save_steps', value: '500' },
+      ],
+    },
+  },
 ]
 
 const { datasetTree, modelTree, operatorTree, loadDatasetOptions, ensureDatasetById, loadModelOptions, loadOperatorOptions, findModelName, findDatasetName, buildCascaderValue } = useTrainOptions()
@@ -243,17 +359,60 @@ const form = reactive({
   method: 'lora',
   baseModel: '',
   operator: '',
-  learningRate: '1e-5',
-  epochs: 1,
-  batchSize: 1,
-  maxLength: 1024,
-  gradAccumSteps: 1,
-  kvParams: [] as { key: string; value: string }[],
+  learningRate: sceneOptions[0].template.learningRate,
+  epochs: sceneOptions[0].template.epochs,
+  batchSize: sceneOptions[0].template.batchSize,
+  maxLength: sceneOptions[0].template.maxLength,
+  gradAccumSteps: sceneOptions[0].template.gradAccumSteps,
+  kvParams: sceneOptions[0].template.kvParams.map(p => ({ ...p })) as { key: string; value: string }[],
   poolId: '',
   gpuCount: 1,
   cpu: 4,
   memory: 32,
 })
+
+function applyScenePreset(value: string) {
+  const preset = sceneOptions.find(s => s.value === value)
+  if (!preset) return
+  const t = preset.template
+  form.learningRate = t.learningRate
+  form.epochs = t.epochs
+  form.batchSize = t.batchSize
+  form.maxLength = t.maxLength
+  form.gradAccumSteps = t.gradAccumSteps
+  // 合并模板自定义参数：同名 key（lora_rank/max_pixels 等）以模板为准，用户额外项保留
+  const templateKeys = new Set(t.kvParams.map(p => p.key))
+  const kept = form.kvParams.filter(p => p.key && !templateKeys.has(p.key))
+  form.kvParams = [...t.kvParams.map(p => ({ ...p })), ...kept]
+}
+
+function selectScene(value: string) {
+  const preset = sceneOptions.find(s => s.value === value)
+  form.sceneType = value
+  if (preset) {
+    applyScenePreset(value)
+    ElMessage.info(`已应用「${preset.label}」基础参数模板，可在步骤三调整或一键恢复`)
+  }
+}
+
+function restoreScenePreset() {
+  const preset = sceneOptions.find(s => s.value === form.sceneType)
+  if (preset) {
+    applyScenePreset(form.sceneType)
+    ElMessage.success(`已恢复「${preset.label}」基础参数模板`)
+  }
+}
+
+const currentScene = computed(() => sceneOptions.find(s => s.value === form.sceneType))
+
+// 步骤二：按场景给出数据集类型提示，与各场景基础参数模板形成完整闭环
+const datasetTips: Record<string, string> = {
+  ocr: 'OCR 场景为多模态图文任务，请选择包含图像字段（messages + images）的多模态 SFT 数据集，如内置演示数据集 scene_ocr_demo（票据/单据/文档识别问答）。',
+  vision: '视觉理解（General Vision）为多模态图文任务，请选择包含图像字段（messages + images）的多模态 SFT 数据集，如内置演示数据集 scene_vision_demo（图像描述 / VQA 问答）。',
+  chat: '客服场景为纯文本对话任务，请选择对话式 SFT 数据集，如内置演示数据集 sft_self_cognition 或 scene_customer_service（电商客服多轮对话）。',
+  code: '代码生成场景为纯文本任务，请选择代码相关的文本 SFT 数据集，或自行导入代码问答数据。',
+}
+const datasetTip = computed(() => datasetTips[form.sceneType] || '请选择与当前场景匹配的 SFT 训练数据集。')
 
 function goBack() {
   router.push('/train/scene')
@@ -382,6 +541,10 @@ onMounted(async () => {
   font-size: 12px;
   color: $text-secondary;
 }
+.dataset-tip {
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
 .scene-cards {
   display: flex;
   gap: 16px;
@@ -417,5 +580,24 @@ onMounted(async () => {
   font-size: 12px;
   color: $text-secondary;
   line-height: 1.4;
+}
+.scene-tip {
+  margin-top: 8px;
+  font-size: 11px;
+  color: $color-primary;
+  background: rgba($color-primary, 0.06);
+  border-radius: 4px;
+  padding: 4px 6px;
+  line-height: 1.4;
+  text-align: left;
+}
+.preset-alert {
+  margin-bottom: 16px;
+}
+.preset-alert-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 </style>

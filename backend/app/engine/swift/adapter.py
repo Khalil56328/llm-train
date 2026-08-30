@@ -600,7 +600,9 @@ class SwiftEngineAdapter:
         # 用户在部署参数中自行指定 host 时不覆盖
         if not any(k in params for k in ("host",)):
             params["host"] = "0.0.0.0"
-        if framework == "vLLM":
+        if framework in ("vLLM", "MindIE"):
+            # MindIE 当前仅保留页面端展示（部署表单/列表/详情），底层统一映射为 vLLM 启动，
+            # 避免依赖宿主机 MindIE 运行时与昇腾 NPU 环境。
             # vLLM >=0.6 官方推荐 `vllm serve`；旧入口 python -m vllm.entrypoints.openai.api_server
             # 已弃用（未来版本可能移除），作为回退保留。
             if "serve" in cls._vllm_subcommands():
@@ -618,18 +620,6 @@ class SwiftEngineAdapter:
             if params:
                 for key, value in params.items():
                     cmd.extend([f"--{key.replace('_', '-')}", str(value)])
-            return cmd
-
-        elif framework == "MindIE":
-            cmd = cls._resolve_subcommand("swift deploy").split()
-            cmd.extend([
-                cls._resolve_flag("--model", cmd[-1]), model_path,
-                "--port", str(port),
-                "--infer_backend", "mindie",
-            ])
-            if params:
-                for key, value in params.items():
-                    cmd.extend([f"--{key}", str(value)])
             return cmd
 
         # 默认 Swift deploy

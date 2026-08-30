@@ -73,8 +73,10 @@
                     @click="toggleScene(key as string)">
                     <el-icon :size="28"><component :is="EvalSceneIconMap[key as EvalScene]" /></el-icon>
                     <span>{{ label }}</span>
+                    <span class="scene-desc">{{ EvalSceneDescMap[key as EvalScene] }}</span>
                   </div>
                 </div>
+                <div class="scene-tip">自动评测将逐条调用模型服务推理接口，按所选维度对回复进行启发式评分（参考答案来自数据集 golden 字段）</div>
               </el-form-item>
 
               <el-form-item label="评估指标" class="no-asterisk">
@@ -106,6 +108,9 @@
 
             <!-- 人工评测场景选择 -->
             <template v-if="evalType === 'manual'">
+              <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px"
+                title="人工评测流程：任务启动后自动调用模型服务生成回复 → 评审员在评审页逐条打分 → 全部评分完成后自动生成评测报告" />
+
               <el-form-item label="评估量级" prop="ratingScale">
                 <div class="rating-scale">
                   <el-slider v-model="form.ratingScale" :min="1" :max="10" :step="1" show-stops
@@ -121,8 +126,10 @@
                     @click="toggleScene(key as string)">
                     <el-icon :size="28"><component :is="ManualEvalSceneIconMap[key as ManualEvalScene]" /></el-icon>
                     <span>{{ label }}</span>
+                    <span class="scene-desc">{{ EvalSceneDescMap[key as EvalScene] }}</span>
                   </div>
                 </div>
+                <div class="scene-tip">人工评测同样先执行模型推理生成真实回复，所选维度将作为评审员打分时的关注要点</div>
               </el-form-item>
 
               <el-form-item label="评估指标">
@@ -174,7 +181,7 @@ import { createEvaluation } from '@/api/service'
 import { getDatasetList, getPlazaDatasets, getDatasetVersions } from '@/api/dataset'
 import { getDeploymentList } from '@/api/service'
 import type { EvalScene, ManualEvalScene, DatasetVersion } from '@/types'
-import { EvalSceneMap, EvalSceneIconMap, ManualEvalSceneMap, ManualEvalSceneIconMap } from '@/types'
+import { EvalSceneMap, EvalSceneIconMap, EvalSceneDescMap, ManualEvalSceneMap, ManualEvalSceneIconMap } from '@/types'
 
 const router = useRouter()
 const route = useRoute()
@@ -317,6 +324,7 @@ onMounted(() => {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+  width: 100%;
 }
 .scene-card {
   display: flex;
@@ -333,6 +341,14 @@ onMounted(() => {
     font-size: 13px;
     color: $text-secondary;
   }
+  .scene-desc {
+    font-size: 12px;
+    color: $text-secondary;
+    opacity: 0.72;
+    text-align: center;
+    line-height: 1.4;
+    max-width: 132px;
+  }
   &:hover {
     border-color: $color-primary;
   }
@@ -342,6 +358,14 @@ onMounted(() => {
     span { color: $color-primary; font-weight: 600; }
     .el-icon { color: $color-primary; }
   }
+}
+
+.scene-tip {
+  width: 100%;
+  font-size: 12px;
+  color: $text-secondary;
+  margin-top: 6px;
+  line-height: 1.5;
 }
 
 .rating-scale {

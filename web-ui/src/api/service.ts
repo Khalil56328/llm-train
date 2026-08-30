@@ -1,5 +1,5 @@
 import { get, post, put, del } from '@/utils/request'
-import type { PaginatedData, Deployment, EvaluationTask, EvalItem } from '@/types'
+import type { PaginatedData, Deployment, EvaluationTask, EvalItem, EvalReport } from '@/types'
 
 const DP_BASE = '/deployments'
 const EV_BASE = '/evaluations'
@@ -137,20 +137,16 @@ export function startEvaluation(id: string) {
   return post(`${EV_BASE}/${id}/start`)
 }
 
+export function cancelEvaluation(id: string) {
+  return post(`${EV_BASE}/${id}/cancel`)
+}
+
 export function getEvalStats(params?: Record<string, unknown>) {
   return get<Record<string, unknown>>(`${EV_BASE}/stats`, params)
 }
 
 export function getEvalReport(id: string) {
-  return get<{
-    taskName: string
-    status: string
-    overallScore: number
-    scenes: string[]
-    dimensionScores: { dimension: string; score: number }[]
-    details: Record<string, unknown>[]
-    reportUrl: string
-  }>(`${EV_BASE}/${id}/report`)
+  return get<Partial<EvalReport>>(`${EV_BASE}/${id}/report`)
 }
 
 // 人工评测项

@@ -123,11 +123,15 @@ class DatasetSeedService:
 
         name = str(meta["name"]).strip()[:200]
         data_type = str(meta.get("data_type") or "general").upper()[:20]
+        eval_dimensions = meta.get("eval_dimensions")
         dset = Dataset(
             id=_uuid(),
             name=name,
             category=str(meta.get("category") or "")[:100] or None,
             type=str(meta.get("type") or "training")[:20],
+            eval_dimensions=(json.dumps(eval_dimensions, ensure_ascii=False)[:500]
+                             if isinstance(eval_dimensions, dict)
+                             else (str(eval_dimensions)[:500] if eval_dimensions else None)),
             data_type=data_type,
             description=str(meta.get("description") or "")[:500] or None,
             source="platform",

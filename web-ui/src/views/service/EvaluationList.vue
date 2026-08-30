@@ -28,26 +28,12 @@
       :columns="columns"
       :loading="loading"
       :total="total"
-      :action-width="260"
+      :action-width="220"
       v-model:page="pageIndex"
       v-model:page-size="pageSize"
       @page-change="fetchData"
       @size-change="fetchData"
     >
-      <!-- 评测场景 -->
-      <template #sceneSlot="{ row }">
-        <template v-if="row.evalType === 'auto'">
-          <el-tag v-for="s in (row.scenes || [])" :key="s" size="small" style="margin-right: 4px">
-            {{ EvalSceneMap[s as EvalScene] || s }}
-          </el-tag>
-        </template>
-        <template v-else>
-          <el-tag v-for="s in (row.scenes || [])" :key="s" size="small" style="margin-right: 4px">
-            {{ ManualEvalSceneMap[s as ManualEvalScene] || s }}
-          </el-tag>
-        </template>
-      </template>
-
       <!-- 评分 -->
       <template #scoreSlot="{ row }">
         <span v-if="row.score != null">{{ row.score }}</span>
@@ -63,8 +49,8 @@
       <template #actions="{ row }">
         <el-button type="primary" link size="small" @click="goDetail(row)">详情</el-button>
         <el-button v-if="row.status === 'pending'" type="primary" link size="small" @click="startEval(row)">启动</el-button>
-        <el-button v-if="row.evalType === 'manual' && row.status === 'running'" type="primary" link size="small" @click="goReview(row)">评测</el-button>
-        <el-button type="primary" link size="small" @click="goReport(row)">报告</el-button>
+        <el-button v-if="['pending', 'running'].includes(row.status)" type="warning" link size="small" @click="cancelEval(row)">取消</el-button>
+        <el-button v-if="row.evalType === 'manual' && row.status === 'running'" type="primary" link size="small" @click="goReview(row)">评审</el-button>
         <el-button type="danger" link size="small" @click="deleteEval(row)">删除</el-button>
       </template>
     </DataTable>
@@ -81,10 +67,11 @@ import DataTable, { type ColumnConfig } from '@/components/common/DataTable.vue'
 import {
   getEvaluationList,
   startEvaluation,
+  cancelEvaluation,
   deleteEvaluation as deleteEvaluationApi,
 } from '@/api/service'
-import type { EvalStatus, EvalScene, ManualEvalScene } from '@/types'
-import { EvalStatusMap, EvalStatusColorMap, EvalSceneMap, ManualEvalSceneMap } from '@/types'
+import type { EvalStatus } from '@/types'
+import { EvalStatusMap, EvalStatusColorMap } from '@/types'
 
 const router = useRouter()
 const activeTab = ref<'auto' | 'manual'>('auto')
@@ -100,10 +87,7 @@ const columns: ColumnConfig[] = [
   { prop: 'name', label: '评测名称', minWidth: 200 },
   { prop: 'status', label: '状态', width: 100, type: 'status' as const, statusMap: EvalStatusMap, statusColorMap: EvalStatusColorMap },
   { prop: 'datasetName', label: '数据集', minWidth: 160 },
-  { prop: 'datasetVersion', label: '数据集版本', minWidth: 110 },
-
   { prop: 'deploymentName', label: '模型服务', minWidth: 160 },
-  { prop: 'scenes', label: '评测场景', minWidth: 180, slot: 'sceneSlot' },
   { prop: 'score', label: '评分', width: 80, align: 'center', slot: 'scoreSlot' },
   { prop: 'progress', label: '进度', width: 100, slot: 'progressSlot' },
   { prop: 'createdBy', label: '创建者', width: 100 },
@@ -152,12 +136,27 @@ function goDetail(row: any) {
   router.push(`/service/evaluation/detail/${row.id}`)
 }
 
-function goReport(row: any) {
-  router.push(`/service/evaluation/report/${row.id}`)
-}
-
 function goReview(row: any) {
   router.push(`/service/evaluation/review/${row.id}`)
+}
+
+async function cancelEval(row: any) {
+  try {
+    await ElMessageBox.confirm('确定取消该评测任务吗？推理中的任务将在当前样本后停止。', '取消评测', {
+      confirmButtonText: '确定',
+      cancelButtonText: '再想想',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  try {
+    await cancelEvaluation(row.id)
+    ElMessage.success('评测任务已取消')
+    fetchData()
+  } catch (err: any) {
+    ElMessage.error(err?.message || '取消失败')
+  }
 }
 
 async function startEval(row: any) {

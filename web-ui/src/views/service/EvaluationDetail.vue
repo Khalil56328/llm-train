@@ -83,7 +83,11 @@
               </el-descriptions>
               <h4 class="sub-title">维度评分</h4>
               <el-table :data="report.dimensionScores" size="small" border>
-                <el-table-column prop="dimension" label="维度" min-width="120" />
+                <el-table-column label="维度" min-width="120">
+                  <template #default="{ row }">
+                    {{ row.dimensionName || row.dimension }}
+                  </template>
+                </el-table-column>
                 <el-table-column prop="score" label="评分" width="100" />
               </el-table>
             </div>

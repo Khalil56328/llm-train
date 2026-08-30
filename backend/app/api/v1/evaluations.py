@@ -11,6 +11,7 @@ from app.core.response import success_response
 from app.services.eval_service import EvalService
 from app.services.notification_service import NotificationService
 from app.api.v1.task_dispatch import dispatch_task
+from app.tasks.control import set_control
 from app.tasks.executor import storage_dir
 from app.schemas.evaluation import EvaluationCreate, EvaluationUpdate, EvalItemScore
 
@@ -149,6 +150,25 @@ async def start_evaluation(
     return success_response({**result, "dispatch": dispatch})
 
 
+@router.post("/{eval_id}/cancel")
+async def cancel_evaluation(
+    eval_id: str,
+    db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    """取消评测任务：向执行器发送取消信号，任务状态置为已停止"""
+    svc = EvalService(db)
+    e = await svc.get_evaluation(eval_id)
+    if not e:
+        raise HTTPException(status_code=404, detail="评测任务不存在")
+    if e["status"] not in ("pending", "running"):
+        raise HTTPException(status_code=400, detail="任务已结束，无法取消")
+
+    set_control(eval_id, "cancel")
+    result = await svc.update_eval_status(eval_id, "stopped", error_message="任务已被手动取消")
+    return success_response(result)
+
+
 @router.get("/{eval_id}/report")
 async def get_eval_report(
     eval_id: str,
@@ -165,11 +185,16 @@ async def get_eval_report(
     return success_response({
         "taskName": e.get("name"),
         "status": e.get("status"),
+        "evalType": report.get("evalType", e.get("evalType")),
+        "ratingScale": report.get("ratingScale", e.get("ratingScale")),
         "overallScore": report.get("score", e.get("score")),
         "scenes": e.get("scenes", []),
         "dimensionScores": report.get("dimensionScores", []),
         "summary": report.get("summary", ""),
         "generatedAt": report.get("generatedAt"),
+        "totalSamples": report.get("totalSamples"),
+        "passedCount": report.get("passedCount"),
+        "reviewers": report.get("reviewers", []),
         "details": report.get("samples", []),
         "reportUrl": e.get("reportUrl"),
     })

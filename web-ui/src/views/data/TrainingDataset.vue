@@ -217,6 +217,7 @@ const categories = [
   { label: '文本生成', value: '文本生成' },
   { label: '图像生成', value: '图像生成' },
   { label: '代码生成', value: '代码生成' },
+  { label: '视觉理解', value: '视觉理解' },
 ]
 
 const dataTypes = [
