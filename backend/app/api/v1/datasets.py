@@ -719,13 +719,14 @@ async def plaza_datasets(
     page_size: int = Query(12, alias="pageSize"),
     keyword: str = Query(None),
     dataset_type: str = Query(None),
+    data_type: str = Query(None),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
     svc = DatasetService(db)
     result = await svc.list_datasets(
         page_index=page_index, page_size=page_size, keyword=keyword,
-        dataset_type=dataset_type, is_public=True,
+        dataset_type=dataset_type, data_type=data_type, is_public=True,
     )
     return success_response(result)
 

@@ -140,6 +140,7 @@ async function fetchData() {
       pageSize: pageSize.value,
       keyword: keyword.value || undefined,
       dataset_type: filterType.value || undefined,
+      data_type: filterDataType.value || undefined,
     })
     tableData.value = data.list
     total.value = data.total
