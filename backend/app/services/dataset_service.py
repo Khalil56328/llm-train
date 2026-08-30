@@ -337,10 +337,13 @@ class DatasetService:
     async def _migrate_legacy_files(self, dataset_id: str) -> int:
         """历史兼容：将未挂版本 / 未按版本目录落盘的旧文件迁移到默认版本。
 
-        版本功能上线前的文件 version_id 为空，物理文件直接落在数据集级目录
-        （datasets/{dataset_id}/...）。迁移后：
+        版本功能上线前的文件 version_id 为空；其中物理文件落在数据集级目录
+        （datasets/{dataset_id}/...）的，同时移动到所属版本目录。
+        演示数据集文件位于共享目录（workspace/datasets/demo1/...，路径不含
+        dataset_id），只补版本归属，不移动物理文件。
+        迁移后：
         1. version_id 为空 → 挂到默认版本
-        2. 物理文件仍位于数据集级目录 → 移动到默认版本目录
+        2. 物理文件仍在数据集级目录 → 移动到所属版本目录
         """
         default_v = await self._get_default_version(dataset_id)
         if not default_v:
@@ -357,11 +360,14 @@ class DatasetService:
         moved = changed = 0
         for f in rows:
             old = f.storage_path or ""
-            if not _is_legacy_file_path(old, dataset_id):
-                continue
+            legacy_path = _is_legacy_file_path(old, dataset_id)
+            # 1) 未挂版本的文件（历史数据 / 老演示数据集）挂到默认版本
             if not f.version_id:
                 f.version_id = default_v.id
                 changed += 1
+            # 2) 物理文件仍在数据集级目录 → 移动到所属版本目录
+            if not legacy_path:
+                continue
             v = versions.get(f.version_id)
             if v is None:
                 v = (await self.db.execute(

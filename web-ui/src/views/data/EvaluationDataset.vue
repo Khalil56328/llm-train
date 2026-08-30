@@ -80,10 +80,6 @@
       </template>
       <template #category="{ row }">{{ getCategoryLabel((row as Dataset).category) }}</template>
       <template #dataType="{ row }">{{ getDataTypeLabel((row as Dataset).dataType) }}</template>
-      <template #versions="{ row }">
-        <el-tag v-if="(row as Dataset).defaultVersion" type="primary" size="small">{{ (row as Dataset).defaultVersion }}</el-tag>
-        <span class="version-count">共 {{ (row as Dataset).versionCount ?? 1 }} 个版本</span>
-      </template>
       <template #actions="{ row }">
         <el-button type="primary" link size="small" @click="openDetailDialog(row as Dataset)">详情</el-button>
         <el-dropdown trigger="click">
@@ -262,7 +258,6 @@ const columns: ColumnConfig[] = [
   { prop: 'name', label: '数据集名称', minWidth: 180, slot: 'name' },
   { prop: 'category', label: '数据集分类', minWidth: 120, slot: 'category' },
   { prop: 'dataType', label: '数据类型', minWidth: 150, slot: 'dataType' },
-  { prop: 'versions', label: '版本', width: 150, slot: 'versions' },
   {
     prop: 'isPublic',
     label: '是否公开',
@@ -476,11 +471,6 @@ onMounted(fetchData)
   }
 }
 .detail { padding: 8px 12px; }
-.version-count {
-  margin-left: 8px;
-  color: $text-secondary;
-  font-size: 12px;
-}
 .version-section {
   padding: 8px 12px 16px;
   .version-header {

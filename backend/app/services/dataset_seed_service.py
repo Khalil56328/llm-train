@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -36,6 +37,19 @@ def _uuid() -> str:
 
 # 视为数据文件的扩展名（dataset.json 为目录元信息，不算数据文件）
 _DATA_FILE_EXTS = {".jsonl", ".json", ".csv", ".txt", ".parquet"}
+
+
+def _estimate_file_samples(p: Path) -> int:
+    """粗略统计数据文件样本数：jsonl/txt 每行一条，csv 减表头，其他格式返回 0"""
+    suffix = p.suffix.lower()
+    if suffix not in (".jsonl", ".csv", ".txt"):
+        return 0
+    try:
+        with p.open("r", encoding="utf-8", errors="ignore") as fh:
+            count = sum(1 for _ in fh)
+        return max(count - 1, 0) if suffix == ".csv" else count
+    except OSError:
+        return 0
 
 
 def _has_data_files(abs_dir: Path) -> bool:
@@ -84,11 +98,15 @@ class DatasetSeedService:
             if not _has_data_files(abs_dir):
                 print(f"[WARN] Dataset seed: 跳过无数据文件的目录 {abs_dir}")
                 continue
-            # 幂等：已按 storage_path 录入过的数据集跳过
+            # 幂等：已按 storage_path 录入过的数据集跳过，但老数据需要自愈
+            # （版本统计/创建人为空、文件未挂版本/样本数为 0）
             existing = await self.db.execute(
                 select(Dataset.id).where(Dataset.storage_path == str(abs_dir)).limit(1)
             )
-            if existing.scalar_one_or_none():
+            existing_id = existing.scalar_one_or_none()
+            if existing_id:
+                if await self._heal_version(existing_id, abs_dir, meta):
+                    await self.db.flush()
                 continue
             if await self._insert_one(abs_dir, meta):
                 inserted += 1
@@ -123,6 +141,18 @@ class DatasetSeedService:
         self.db.add(dset)
         await self.db.flush()
 
+        now = datetime.now()
+        data_files = [
+            f for f in sorted(abs_dir.iterdir())
+            if f.is_file() and f.name != "dataset.json" and not f.name.startswith(".")
+        ]
+        total_size = 0
+        for f in data_files:
+            try:
+                total_size += f.stat().st_size
+            except OSError:
+                pass
+
         # 演示数据集目录本身就是 v1 版本目录（文件直接位于该目录下）
         v1_id = _uuid()
         self.db.add(DatasetVersion(
@@ -130,18 +160,20 @@ class DatasetSeedService:
             dataset_id=dset.id,
             version="v1",
             storage_path=str(abs_dir),
+            file_count=len(data_files),
+            size=total_size,
+            sample_count=int(meta.get("sample_count") or 0),
             is_default=True,
+            created_by="平台",
+            created_at=now,
+            updated_at=now,
         ))
 
-        total_size = 0
-        for f in sorted(abs_dir.iterdir()):
-            if not f.is_file() or f.name == "dataset.json" or f.name.startswith("."):
-                continue
+        for f in data_files:
             try:
                 size = f.stat().st_size
             except OSError:
                 size = 0
-            total_size += size
             self.db.add(DatasetFile(
                 id=_uuid(),
                 dataset_id=dset.id,
@@ -151,11 +183,66 @@ class DatasetSeedService:
                 status="success",
                 size=size,
                 storage_path=str(f),
-                sample_count=0,
+                sample_count=_estimate_file_samples(f),
             ))
         dset.size = total_size
         print(f"[INFO] Dataset seed: 已录入演示数据集 {name}（{dset.storage_path}）")
         return True
+
+    async def _heal_version(self, dataset_id: str, abs_dir: Path, meta: Dict) -> bool:
+        """自愈：为已录入的演示数据集补齐版本统计/创建人与文件样本数/版本归属。
+
+        老环境录入的演示数据集：版本记录统计为空（file_count=0、created_by 为空、
+        sample_count=0），文件也未挂版本（version_id 为空）、样本数为 0。
+        这里按目录重新统计补齐，避免版本展开面板显示 0 与 "-"。
+        """
+        result = await self.db.execute(
+            select(DatasetVersion).where(DatasetVersion.dataset_id == dataset_id)
+        )
+        versions = result.scalars().all()
+        if not versions:
+            return False
+        default_v = next((v for v in versions if v.is_default), versions[0])
+
+        data_files = [
+            f for f in sorted(abs_dir.iterdir())
+            if f.is_file() and f.name != "dataset.json" and not f.name.startswith(".")
+        ]
+        total_size = 0
+        for f in data_files:
+            try:
+                total_size += f.stat().st_size
+            except OSError:
+                pass
+
+        now = datetime.now()
+        need_flush = False
+        for v in versions:
+            if not v.file_count or not v.created_by:
+                v.file_count = len(data_files)
+                v.size = total_size
+                v.sample_count = int(meta.get("sample_count") or 0)
+                v.created_by = v.created_by or "平台"
+                v.created_at = v.created_at or now
+                v.updated_at = now
+                need_flush = True
+
+        # 目录内文件：补齐样本数；未挂版本的文件挂到默认版本
+        rows = (await self.db.execute(
+            select(DatasetFile).where(DatasetFile.dataset_id == dataset_id)
+        )).scalars().all()
+        for f in rows:
+            if f.sample_count == 0 and f.storage_path:
+                p = Path(f.storage_path)
+                if p.is_file():
+                    f.sample_count = _estimate_file_samples(p)
+                    need_flush = True
+            if not f.version_id and default_v:
+                f.version_id = default_v.id
+                need_flush = True
+        if need_flush:
+            await self.db.flush()
+        return need_flush
 
     def _resolve_workspace_dir(self, rel_dir: str) -> Optional[Path]:
         """解析训练工作目录下的相对路径（兼容绝对路径形式的 TRAIN_WORKSPACE）"""
