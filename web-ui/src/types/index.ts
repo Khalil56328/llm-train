@@ -163,6 +163,8 @@ export interface Model {
   type: ModelType
   spec: ModelSpec
   vendor: string
+  frameworks?: string[]
+  frameworkLabel?: string
   version: string
   description?: string
   tags: string[]
@@ -244,10 +246,11 @@ export const OperatorCategoryMap: Record<OperatorCategory, string> = {
 
 export type ResourceType = 'CPU' | 'GPU'
 
-export type TrainingFramework = 'ms-swift'
+export type TrainingFramework = 'ms-swift' | 'llamafactory'
 
 export const TrainingFrameworkMap: Record<TrainingFramework, string> = {
   'ms-swift': 'ms-swift',
+  'llamafactory': 'LlamaFactory',
 }
 
 export type TrainingMethod = 'full' | 'freeze' | 'lora'

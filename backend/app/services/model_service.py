@@ -48,6 +48,7 @@ class ModelService:
         type: Optional[str] = None,
         spec: Optional[str] = None,
         vendor: Optional[str] = None,
+        framework: Optional[str] = None,
         status: Optional[str] = None,
         owner_id: Optional[str] = None,
         is_public: Optional[bool] = None,
@@ -64,6 +65,10 @@ class ModelService:
             q, count_q = q.where(Model.spec == spec), count_q.where(Model.spec == spec)
         if vendor:
             q, count_q = q.where(Model.vendor == vendor), count_q.where(Model.vendor == vendor)
+        # 推理框架：框架信息挂在版本表（ModelVersion.framework），按任一版本匹配过滤
+        if framework:
+            f = Model.id.in_(select(ModelVersion.model_id).where(ModelVersion.framework == framework))
+            q, count_q = q.where(f), count_q.where(f)
         if status:
             q, count_q = q.where(Model.status == status), count_q.where(Model.status == status)
         if owner_id:
@@ -77,8 +82,27 @@ class ModelService:
              .offset((page_index - 1) * page_size).limit(page_size)
         )).scalars().all()
 
+        # 附加各模型版本的推理框架（用于广场卡片展示与筛选结果回显）
+        fw_map: Dict[str, List[str]] = {}
+        ver_rows = (await self.db.execute(
+            select(ModelVersion.model_id, ModelVersion.framework)
+            .where(ModelVersion.model_id.in_([m.id for m in rows]))
+        )).all() if rows else []
+        for mid, fw in ver_rows:
+            if fw:
+                fws = fw_map.setdefault(mid, [])
+                if fw not in fws:
+                    fws.append(fw)
+        items = []
+        for m in rows:
+            d = _model_to_dict(m)
+            fws = fw_map.get(m.id) or []
+            d["frameworks"] = fws
+            d["frameworkLabel"] = ", ".join("自定义" if fw == "custom" else fw for fw in fws) if fws else "-"
+            items.append(d)
+
         return {
-            "list": [_model_to_dict(m) for m in rows],
+            "list": items,
             "total": total,
             "pageIndex": page_index,
             "pageSize": page_size,
@@ -153,11 +177,12 @@ class ModelService:
         keyword: Optional[str] = None,
         type: Optional[str] = None,
         spec: Optional[str] = None,
-        vendor: Optional[str] = None,
+        framework: Optional[str] = None,
     ) -> Dict:
+        # 广场筛选项：推理框架（替代原"厂商"过滤，框架信息取自模型版本）
         return await self.list_models(
             page_index=page_index, page_size=page_size,
-            keyword=keyword, type=type, spec=spec, vendor=vendor,
+            keyword=keyword, type=type, spec=spec, framework=framework,
             is_public=True, status="active",
         )
 

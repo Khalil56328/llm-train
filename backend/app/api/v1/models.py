@@ -48,14 +48,14 @@ async def plaza_models(
     keyword: str = Query(None),
     type: str = Query(None),
     spec: str = Query(None),
-    vendor: str = Query(None),
+    framework: str = Query(None),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
     svc = ModelService(db)
     result = await svc.list_plaza_models(
         page_index=page_index, page_size=page_size,
-        keyword=keyword, type=type, spec=spec, vendor=vendor,
+        keyword=keyword, type=type, spec=spec, framework=framework,
     )
     return success_response(result)
 

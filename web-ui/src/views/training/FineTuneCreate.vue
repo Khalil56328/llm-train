@@ -58,8 +58,9 @@
             <el-row :gutter="20">
               <el-col :span="12">
                 <el-form-item label="训练框架" required>
-                  <el-select v-model="form.framework" style="width: 100%" disabled>
+                  <el-select v-model="form.framework" style="width: 100%">
                     <el-option label="ms-swift" value="ms-swift" />
+                    <el-option label="LlamaFactory" value="llamafactory" />
                   </el-select>
                 </el-form-item>
               </el-col>
@@ -67,6 +68,7 @@
                 <el-form-item label="训练方法" required>
                   <el-radio-group v-model="form.method">
                     <el-radio value="lora">LoRA微调</el-radio>
+                    <el-radio value="freeze">冻结微调</el-radio>
                     <el-radio value="full">全量更新</el-radio>
                   </el-radio-group>
                 </el-form-item>
@@ -225,7 +227,7 @@ async function buildPayload(): Promise<Record<string, unknown>> {
     name: form.name,
     taskType: 'fine-tune',
     taskSubType: form.taskType,
-    subType: form.method === 'lora' ? 'LoRA微调' : '全量更新',
+    subType: form.method === 'lora' ? 'LoRA微调' : form.method === 'freeze' ? '冻结微调' : '全量更新',
     description: form.description,
     baseModelId: form.baseModel.split('/')[1] || form.baseModel,
     baseModelVersion: form.baseModel.split('/')[2] || '',
@@ -237,6 +239,7 @@ async function buildPayload(): Promise<Record<string, unknown>> {
     datasetVersion: form.datasetId.split('/')[2] || '',
     framework: form.framework,
     hyperParams: {
+      training_method: form.method,
       learning_rate: form.learningRate,
       num_train_epochs: form.epochs,
       per_device_train_batch_size: form.batchSize,
@@ -283,12 +286,13 @@ async function loadTaskDetail() {
     form.datasetId = task.datasetId ? buildCascaderValue(task.datasetId, 'dataset', task.datasetVersion) : ''
     form.baseModel = task.baseModelId ? buildCascaderValue(task.baseModelId, 'model', task.baseModelVersion) : ''
     form.operator = task.operatorId ? buildCascaderValue(task.operatorId, 'operator', task.operatorVersion) : ''
-    form.method = task.subType === '全量更新' ? 'full' : 'lora'
+    form.framework = String(task.framework ?? '') || 'ms-swift'
+    form.method = task.subType === '全量更新' ? 'full' : task.subType === '冻结微调' ? 'freeze' : 'lora'
     const hp = task.hyperParams || {}
     form.learningRate = String(hp.learning_rate ?? form.learningRate)
     form.epochs = Number(hp.num_train_epochs ?? form.epochs)
     form.batchSize = Number(hp.per_device_train_batch_size ?? form.batchSize)
-    const stdKeys = ['learning_rate', 'num_train_epochs', 'per_device_train_batch_size']
+    const stdKeys = ['training_method', 'learning_rate', 'num_train_epochs', 'per_device_train_batch_size']
     form.kvParams = Object.entries(hp)
       .filter(([k]) => !stdKeys.includes(k))
       .map(([key, value]) => ({ key, value: String(value) }))

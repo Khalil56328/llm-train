@@ -5,7 +5,7 @@
         <el-icon><ArrowLeft /></el-icon> 返回
       </el-button>
     </div>
-    <PageHeaderCard title="创建对齐训练任务" desc="通过 DPO/KTO/ORPO/SimPO 等离线偏好对齐方法，使模型输出更符合人类偏好（演示版暂不支持 RLHF/PPO）。" />
+    <PageHeaderCard title="创建对齐训练任务" desc="通过 RLHF/DPO/KTO/ORPO/SimPO 等偏好对齐方法，使模型输出更符合人类偏好。" />
 
     <StepCards :steps="steps" :current="currentStep" />
 
@@ -24,6 +24,7 @@
               <el-col :span="12">
                 <el-form-item label="对齐方法" required>
                   <el-select v-model="form.alignMethod" style="width: 100%">
+                    <el-option label="RLHF (PPO)" value="rlhf" />
                     <el-option label="DPO" value="dpo" />
                     <el-option label="KTO" value="kto" />
                     <el-option label="ORPO" value="orpo" />
@@ -32,6 +33,7 @@
                 </el-form-item>
               </el-col>
             </el-row>
+            <div v-if="form.alignMethod === 'rlhf'" class="form-tip">RLHF(PPO) 需要 Reward Model 与多卡推理引擎；演示环境将按 DPO 算法实际执行训练，任务信息与引擎命令仍按 RLHF 展示。</div>
             <el-form-item label="任务描述">
               <el-input v-model="form.description" type="textarea" :rows="3" placeholder="请输入任务描述" />
             </el-form-item>
@@ -69,8 +71,9 @@
             <el-row :gutter="20">
               <el-col :span="12">
                 <el-form-item label="训练框架" required>
-                  <el-select v-model="form.framework" style="width: 100%" disabled>
+                  <el-select v-model="form.framework" style="width: 100%">
                     <el-option label="ms-swift" value="ms-swift" />
+                    <el-option label="LlamaFactory" value="llamafactory" />
                   </el-select>
                 </el-form-item>
               </el-col>
@@ -271,6 +274,7 @@ function buildPayload() {
     datasetVersion: form.datasetId.split('/')[2] || '',
     valDatasetId: form.valDatasetId.split('/')[1] || form.valDatasetId,
     valDatasetVersion: form.valDatasetId.split('/')[2] || '',
+    framework: form.framework,
     hyperParams: {
       training_method: form.method,
       learning_rate: form.learningRate,
@@ -319,10 +323,11 @@ async function loadTaskDetail() {
     form.valDatasetId = task.valDatasetId ? buildCascaderValue(task.valDatasetId, 'dataset', task.valDatasetVersion) : ''
     form.baseModel = task.baseModelId ? buildCascaderValue(task.baseModelId, 'model', task.baseModelVersion) : ''
     form.operator = task.operatorId ? buildCascaderValue(task.operatorId, 'operator', task.operatorVersion) : ''
+    form.framework = String(task.framework ?? '') || 'ms-swift'
     const hp = task.hyperParams || {}
-    // 兼容旧任务：RLHF/PPO 回显为 DPO（演示版不支持 PPO）
+    // 对齐方法回显（含 RLHF；未知值兜底为 DPO）
     const sub = String(task.subType || '').toUpperCase()
-    form.alignMethod = ['DPO', 'KTO', 'ORPO', 'SIMPO'].includes(sub) ? sub.toLowerCase() : 'dpo'
+    form.alignMethod = ['RLHF', 'DPO', 'KTO', 'ORPO', 'SIMPO'].includes(sub) ? sub.toLowerCase() : 'dpo'
     form.method = String(hp.training_method ?? 'lora')
     form.learningRate = String(hp.learning_rate ?? form.learningRate)
     form.epochs = Number(hp.epochs ?? form.epochs)
@@ -343,8 +348,9 @@ async function loadTaskDetail() {
 
 const { datasetTree, modelTree, operatorTree, loadDatasetOptions, ensureDatasetById, loadModelOptions, loadOperatorOptions, findModelName, findDatasetName, buildCascaderValue } = useTrainOptions()
 
-// 对齐方法 → 数据集数据类型（ORPO/SimPO 为偏好对齐，数据形态与 DPO 一致）
+// 对齐方法 → 数据集数据类型（RLHF/ORPO/SimPO 为偏好对齐，数据形态与 DPO 一致）
 const ALIGN_DATA_TYPE: Record<string, string> = {
+  rlhf: 'DPO',
   dpo: 'DPO',
   kto: 'KTO',
   orpo: 'DPO',

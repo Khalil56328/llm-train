@@ -10,13 +10,10 @@
         <el-select v-model="filterSpec" placeholder="规格" clearable style="width: 180px" @change="fetchData">
           <el-option v-for="(label, key) in ModelSpecMap" :key="key" :label="label" :value="key" />
         </el-select>
-        <el-select v-model="filterVendor" placeholder="厂商" clearable style="width: 180px" @change="fetchData">
-          <el-option label="DeepSeek" value="DeepSeek" />
-          <el-option label="Qwen" value="Qwen" />
-          <el-option label="BAAI/BGE" value="BAAI" />
-          <el-option label="Meta" value="Meta" />
-          <el-option label="智谱" value="智谱" />
-          <el-option label="OpenAI" value="OpenAI" />
+        <el-select v-model="filterFramework" placeholder="推理框架" clearable style="width: 180px" @change="fetchData">
+          <el-option label="vLLM" value="vLLM" />
+          <el-option label="MindIE" value="MindIE" />
+          <el-option label="自定义" value="custom" />
         </el-select>
       </template>
       <template #actions>
@@ -83,7 +80,7 @@ const router = useRouter()
 const searchKeyword = ref('')
 const filterType = ref('')
 const filterSpec = ref('')
-const filterVendor = ref('')
+const filterFramework = ref('')
 const cardItems = ref<any[]>([])
 const total = ref(0)
 const pageIndex = ref(1)
@@ -101,8 +98,8 @@ function modelToCardItem(m: Model) {
     description: m.description,
     ownerLabel: '规格',
     ownerValue: ModelSpecMap[m.spec as keyof typeof ModelSpecMap] || m.spec,
-    footerLabel: '厂商',
-    footerValue: m.vendor,
+    footerLabel: '推理框架',
+    footerValue: m.frameworkLabel || '-',
   }
 }
 
@@ -116,7 +113,7 @@ async function fetchData() {
     if (searchKeyword.value) params.keyword = searchKeyword.value
     if (filterType.value) params.type = filterType.value
     if (filterSpec.value) params.spec = filterSpec.value
-    if (filterVendor.value) params.vendor = filterVendor.value
+    if (filterFramework.value) params.framework = filterFramework.value
 
     const res = await getPlazaModels(params)
     cardItems.value = (res.list || []).map(modelToCardItem)
@@ -132,7 +129,7 @@ function handleReset() {
   searchKeyword.value = ''
   filterType.value = ''
   filterSpec.value = ''
-  filterVendor.value = ''
+  filterFramework.value = ''
   pageIndex.value = 1
   fetchData()
 }

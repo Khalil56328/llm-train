@@ -49,7 +49,7 @@
             <div class="info-item"><span class="info-label">任务类型：</span>{{ task.taskType }}</div>
             <div class="info-item"><span class="info-label">模态：</span>{{ task.taskSubType || '-' }}</div>
             <div class="info-item"><span class="info-label">训练方法：</span>{{ task.subType || '-' }}</div>
-            <div class="info-item"><span class="info-label">训练框架：</span>{{ task.framework || '-' }}</div>
+            <div class="info-item"><span class="info-label">训练框架：</span>{{ frameworkLabel }}</div>
             <div class="info-item"><span class="info-label">基础模型：</span>{{ task.baseModelName || '-' }}</div>
             <div class="info-item"><span class="info-label">基础模型版本：</span>{{ task.baseModelVersion || '-' }}</div>
             <div class="info-item"><span class="info-label">数据集：</span>{{ task.datasetName || task.datasetId || '-' }}</div>
@@ -134,6 +134,7 @@ import {
   retryTask,
 } from '@/api/training'
 import { fetchResourcePoolList } from '@/api/ops'
+import { TrainingFrameworkMap } from '@/types'
 import type { ResourcePool } from '@/types'
 
 use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
@@ -197,6 +198,10 @@ const poolName = computed(() => {
   if (!id) return '-'
   return poolOptions.value.find((p) => p.id === id)?.name || id
 })
+// 训练框架回显：llamafactory → LlamaFactory，其余按原值展示（ms-swift）
+const frameworkLabel = computed(
+  () => (TrainingFrameworkMap as Record<string, string>)[task.framework] || task.framework || '-'
+)
 const gpuCount = computed(() => {
   const v = task.resourceConfig?.gpuCount ?? task.resourceConfig?.gpu
   return v ? String(v) : '-'

@@ -32,6 +32,7 @@
                   <el-form-item label="训练框架" prop="training_framework">
                     <el-select v-model="form.training_framework" placeholder="请选择训练框架" style="width: 100%">
                       <el-option label="ms-swift" value="ms-swift" />
+                      <el-option label="LlamaFactory" value="llamafactory" />
                     </el-select>
                   </el-form-item>
                 </el-col>

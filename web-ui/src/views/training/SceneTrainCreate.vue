@@ -76,8 +76,9 @@
             <el-row :gutter="20">
               <el-col :span="12">
                 <el-form-item label="训练框架" required>
-                  <el-select v-model="form.framework" style="width: 100%" disabled>
+                  <el-select v-model="form.framework" style="width: 100%">
                     <el-option label="ms-swift" value="ms-swift" />
+                    <el-option label="LlamaFactory" value="llamafactory" />
                   </el-select>
                 </el-form-item>
               </el-col>
@@ -332,6 +333,7 @@ async function loadTaskDetail() {
     form.description = task.description || ''
     form.baseModel = task.baseModelId ? buildCascaderValue(task.baseModelId, 'model', task.baseModelVersion) : ''
     form.operator = task.operatorId ? buildCascaderValue(task.operatorId, 'operator', task.operatorVersion) : ''
+    form.framework = String(task.framework ?? '') || 'ms-swift'
     form.datasetId = task.datasetId ? buildCascaderValue(task.datasetId, 'dataset', task.datasetVersion) : ''
     const scene = sceneOptions.find(s => s.label === task.subType)
     if (scene) form.sceneType = scene.value

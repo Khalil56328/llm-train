@@ -36,7 +36,7 @@ class SwiftEngineAdapter:
     # 但页面选择的数据必须能入库并在详情页回显。
     PLATFORM_INTERNAL_KEYS = frozenset({
         "training_method",      # 页面"训练方法"选择（LoRA/全量），仅入库回显；LoRA 生效由 executor 按 sub_type 注入 tuner_type
-        "framework",            # 页面"训练框架"选择（ms-swift），命令生成时定死 swift
+        "framework",            # 页面"训练框架"选择（ms-swift/llamafactory）：真实执行恒为 swift；llamafactory 仅影响展示命令（见 build_llamafactory_command）
         "method", "alignMethod",
         "compressionType",
         "sceneType", "stages", "globalEnvVars",
@@ -456,6 +456,127 @@ class SwiftEngineAdapter:
         # 关闭 swift 3.x 默认的 v{N}-{时间戳} 版本子目录，保证产物直接落 output_dir
         cls._append_no_version_flag(parts, cmd_name)
         return parts
+
+    # ------------------------------------------------------------------
+    # LLaMA-Factory 训练框架（演示模式）
+    # ------------------------------------------------------------------
+    # 平台仅真实集成 MS-Swift。LlamaFactory 为演示选项：页面可选、入库回显、
+    # 详情页"引擎命令"与执行日志按 LLaMA-Factory 风格展示，真实底层仍由
+    # build_train_command 生成的 swift 命令执行（见 executor），两者互不影响。
+
+    # 任务类型 → LLaMA-Factory stage 映射
+    LLAMAFACTORY_STAGE_MAP = {
+        "fine-tune": "sft",
+        "alignment": "dpo",
+        "pretrain": "pt",
+        "scene": "sft",          # 场景训练本质为 SFT
+        "compression": "sft",    # 压缩页面无训练框架选择，仅为兜底
+    }
+
+    # 偏好对齐子类型 → LLaMA-Factory stage（GSPO 无原生对应，演示就近映射为 grpo）
+    LLAMAFACTORY_ALIGN_STAGE_MAP = {
+        "RLHF": "ppo",
+        "PPO": "ppo",
+        "DPO": "dpo",
+        "KTO": "kto",
+        "GRPO": "grpo",
+        "GSPO": "grpo",
+        "ORPO": "orpo",
+        "SIMPO": "simpo",
+    }
+
+    # 参数名映射（平台 → LLaMA-Factory；主要差异是 max_length → cutoff_len）
+    LLAMAFACTORY_PARAM_MAP = {
+        "learning_rate": "--learning_rate",
+        "epochs": "--num_train_epochs",
+        "num_train_epochs": "--num_train_epochs",
+        "batch_size": "--per_device_train_batch_size",
+        "per_device_train_batch_size": "--per_device_train_batch_size",
+        "max_length": "--cutoff_len",
+        "lora_rank": "--lora_rank",
+        "lora_alpha": "--lora_alpha",
+        "weight_decay": "--weight_decay",
+        "warmup_ratio": "--warmup_ratio",
+        "warmup_steps": "--warmup_steps",
+        "logging_steps": "--logging_steps",
+        "save_steps": "--save_steps",
+        "eval_steps": "--eval_steps",
+        "gradient_accumulation_steps": "--gradient_accumulation_steps",
+    }
+
+    # swift 专用字段：不进入 LLaMA-Factory 展示命令（对应能力由 finetuning_type/lora_target 表达）
+    LLAMAFACTORY_INTERNAL_KEYS = frozenset(PLATFORM_INTERNAL_KEYS) | {
+        "tuner_type", "train_type", "lora_target_modules", "target_modules",
+    }
+
+    @classmethod
+    def build_llamafactory_command(
+        cls,
+        task_type: str,
+        sub_type: Optional[str],
+        base_model: str,
+        dataset: str,
+        output_dir: str,
+        hyper_params: Dict[str, Any],
+    ) -> List[str]:
+        """生成 LLaMA-Factory 风格训练命令（仅用于页面展示回显，不真实执行）。
+
+        演示模式：用户选择 LlamaFactory 框架时，任务详情页"引擎命令"与执行日志
+        展示 llamafactory-cli 命令；真实底层仍由 build_train_command 生成的
+        MS-Swift 命令执行（见 executor）。
+        """
+        # 训练阶段：对齐任务按子类型细分，其余按任务类型映射
+        stage = cls.LLAMAFACTORY_STAGE_MAP.get(task_type or "", "sft")
+        if task_type == "alignment" and sub_type:
+            stage = cls.LLAMAFACTORY_ALIGN_STAGE_MAP.get(sub_type, stage)
+
+        parts = ["llamafactory-cli", "train"]
+        parts.extend(["--stage", stage])
+        parts.append("--do_train")
+        if base_model:
+            parts.extend(["--model_name_or_path", base_model])
+        if dataset:
+            parts.extend(["--dataset", dataset])
+        # 训练方式：全参 / LoRA / 冻结（LLaMA-Factory 原生 finetuning_type：full/lora/freeze）
+        method = str(
+            hyper_params.get("training_method") or hyper_params.get("method") or ""
+        ).lower()
+        if method == "full":
+            parts.extend(["--finetuning_type", "full"])
+        elif method == "freeze":
+            parts.extend(["--finetuning_type", "freeze"])
+        else:
+            parts.extend(["--finetuning_type", "lora", "--lora_target", "all"])
+        parts.extend(["--template", "qwen"])
+        parts.extend(["--output_dir", output_dir])
+
+        rendered_text = " ".join(parts)
+        # 超参映射（平台内部字段与 swift 专用字段跳过；已出现的参数跳过，避免重复）
+        for key, value in hyper_params.items():
+            if key in cls.LLAMAFACTORY_INTERNAL_KEYS:
+                continue
+            flag = cls.LLAMAFACTORY_PARAM_MAP.get(key, f"--{key}")
+            if flag in rendered_text:
+                continue
+            parts.extend([flag, str(value)])
+            rendered_text = " ".join(parts)
+        return parts
+
+    @classmethod
+    def build_llamafactory_merge_command(
+        cls,
+        base_model: str,
+        adapter_dir: str,
+        output_dir: str,
+    ) -> List[str]:
+        """生成 LLaMA-Factory 风格 LoRA 合并命令（仅用于展示回显，不真实执行）"""
+        return [
+            "llamafactory-cli", "export",
+            "--model_name_or_path", base_model,
+            "--adapter_name_or_path", adapter_dir,
+            "--export_dir", output_dir,
+            "--export_size", "5",
+        ]
 
     @classmethod
     def build_inference_command(

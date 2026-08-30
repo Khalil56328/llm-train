@@ -196,6 +196,7 @@
             style="width: 100%"
           >
             <el-option label="ms-swift" value="ms-swift" />
+            <el-option label="LlamaFactory" value="llamafactory" />
           </el-select>
         </el-form-item>
         <el-form-item label="训练方法" prop="training_method">

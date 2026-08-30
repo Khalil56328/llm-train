@@ -16,7 +16,7 @@
             <el-descriptions :column="2" border>
               <el-descriptions-item label="算子名称">{{ detail.name }}</el-descriptions-item>
               <el-descriptions-item label="算子类型">{{ detail.category }}</el-descriptions-item>
-              <el-descriptions-item label="训练框架">{{ detail.training_framework || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="训练框架">{{ frameworkLabel(detail.training_framework) }}</el-descriptions-item>
               <el-descriptions-item label="训练方法">{{ trainingMethodLabel(detail.training_method) }}</el-descriptions-item>
               <el-descriptions-item label="所有者">{{ detail.owner_name || detail.owner || '-' }}</el-descriptions-item>
               <el-descriptions-item label="创建时间">{{ formatDate(detail.created_at) }}</el-descriptions-item>
@@ -79,7 +79,7 @@ import { ArrowLeft } from '@element-plus/icons-vue'
 import PageHeaderCard from '@/components/common/PageHeaderCard.vue'
 import { fetchOperatorDetail } from '@/api/operator'
 import type { OperatorWithVersions, OperatorVersion } from '@/types'
-import { TrainingMethodMap } from '@/types'
+import { TrainingFrameworkMap, TrainingMethodMap } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -99,6 +99,10 @@ const versions = computed<OperatorVersion[]>(() => {
 
 function trainingMethodLabel(val: string | undefined) {
   return (TrainingMethodMap as Record<string, string>)[val || ''] || val || '-'
+}
+
+function frameworkLabel(val: string | undefined) {
+  return (TrainingFrameworkMap as Record<string, string>)[val || ''] || val || '-'
 }
 
 function goBack() {

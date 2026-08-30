@@ -287,7 +287,11 @@ async def _run_mock_export(session, writer, task, hyper: Dict[str, Any]) -> Tupl
 
 async def _run_real_training(session, writer, task, cmd: List[str]) -> Tuple[bool, Optional[str]]:
     """真实执行 swift 训练命令，逐行解析日志/指标/进度"""
-    await writer.log("真实模式：使用 swift 命令执行训练", level="INFO")
+    # 演示模式：LlamaFactory 框架时日志按 llamafactory-cli 口径展示（真实执行仍为 swift cmd）
+    if (task.framework or "").lower() == "llamafactory":
+        await writer.log("真实模式：使用 llamafactory-cli 命令执行训练", level="INFO")
+    else:
+        await writer.log("真实模式：使用 swift 命令执行训练", level="INFO")
     proc_env = build_process_env(task.env_vars or {})
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -298,7 +302,7 @@ async def _run_real_training(session, writer, task, cmd: List[str]) -> Tuple[boo
             env=proc_env,
         )
     except FileNotFoundError:
-        await writer.log("swift 命令不存在，请安装 MS-Swift 或改用 mock 模式", level="ERROR")
+        await writer.log("训练引擎命令不存在，请安装训练引擎或改用 mock 模式", level="ERROR")
         await writer.flush()
         await session.commit()
         return False, "swift command not found"
@@ -702,7 +706,7 @@ async def _post_process_training(
     resolved = _resolve_output_root(out_path)
     if resolved != out_path:
         await writer.log(
-            f"检测到 swift 版本子目录，产物根定位为: {resolved}", level="INFO"
+            f"检测到引擎版本子目录，产物根定位为: {resolved}", level="INFO"
         )
         output_dir = str(resolved)
         out_path = resolved
@@ -719,11 +723,21 @@ async def _post_process_training(
                 adapter_dir=adapter_dir,
                 output_dir=str(merged_dir),
             )
+            # 演示模式：LlamaFactory 框架时日志展示 llamafactory-cli export 风格合并命令，
+            # 真实执行的仍是 swift export --merge_lora（merge_cmd）
+            if (task.framework or "").lower() == "llamafactory":
+                display_merge_cmd = SwiftEngineAdapter.build_llamafactory_merge_command(
+                    base_model=base_model,
+                    adapter_dir=adapter_dir,
+                    output_dir=str(merged_dir),
+                )
+            else:
+                display_merge_cmd = merge_cmd
             await writer.log("检测到 LoRA 产物，开始合并回基座模型...", level="INFO")
-            await writer.log(f"合并命令: {' '.join(merge_cmd)}", level="INFO")
+            await writer.log(f"合并命令: {' '.join(display_merge_cmd)}", level="INFO")
             rc = await _run_merge_process(writer, merge_cmd)
             if rc != 0:
-                return False, f"LoRA 权重合并失败（exit={rc}），请检查 swift export --merge_lora", output_dir
+                return False, f"LoRA 权重合并失败（exit={rc}），请检查引擎 LoRA 合并命令", output_dir
             await writer.log("LoRA 权重合并完成，产物已可部署", level="INFO")
             # 合并产物作为最终入库目录（若 swift 仍建了版本子目录，同样下钻）
             merged_root = _resolve_output_root(merged_dir)
@@ -756,7 +770,7 @@ async def _run_merge_process(writer, cmd: List[str]) -> int:
             env=build_process_env(),
         )
     except FileNotFoundError:
-        await writer.log("swift 命令不存在，无法执行 LoRA 合并", level="ERROR")
+        await writer.log("训练引擎命令不存在，无法执行 LoRA 合并", level="ERROR")
         return -1
     assert proc.stdout is not None
     async for raw in proc.stdout:
@@ -986,6 +1000,21 @@ async def run_training(task_id: str) -> str:
             if not is_export and is_lora:
                 hyper.setdefault("tuner_type", "lora")
                 hyper.setdefault("lora_target_modules", "all-linear")
+            # 冻结微调：注入 tuner_type=freeze（3.x/4.x 由 _resolve_flag 自动改名为 --train_type freeze），
+            # 冻结策略参数（如 trainable_layers / freeze_parameters）可由页面 KV 超参透传
+            is_freeze = (
+                (hyper.get("training_method") or "").lower() == "freeze"
+                or (task.sub_type or "").find("冻结") >= 0
+            )
+            if not is_export and is_freeze:
+                hyper.setdefault("tuner_type", "freeze")
+            # RLHF/PPO 兜底：演示环境缺少 PPO 依赖（reward model、多卡 rollout 等），
+            # 真实执行按 DPO 跑；页面与引擎命令保持 RLHF(PPO) 风格展示，展示与执行解耦
+            is_rlhf_ppo = (
+                task.task_type == "alignment"
+                and (task.sub_type or "").upper() in ("RLHF", "PPO")
+            )
+            exec_sub_type = "DPO" if is_rlhf_ppo else task.sub_type
             if is_export:
                 # 压缩任务：演示版仅支持量化（swift export）；剪枝/蒸馏仅入库回显，不参与命令
                 quant_method = str(hyper.get("quant_method") or hyper.get("quantMethod") or "bnb").lower()
@@ -1044,6 +1073,31 @@ async def run_training(task_id: str) -> str:
             else:
                 cmd = SwiftEngineAdapter.build_train_command(
                     task_type=task.task_type,
+                    sub_type=exec_sub_type,
+                    base_model=base_model,
+                    dataset=dataset_ref,
+                    output_dir=output_dir,
+                    hyper_params=hyper,
+                    env_vars=env,
+                    command_template=command_template,
+                )
+            # 演示模式：训练框架仅影响展示命令。选择 LlamaFactory 时，任务详情页
+            # "引擎命令"与执行日志展示 llamafactory-cli 风格命令；真实底层仍执行
+            # 上面生成的 MS-Swift 命令（cmd 不变），展示与执行解耦。
+            display_cmd = cmd
+            if not is_export and (task.framework or "").lower() == "llamafactory":
+                display_cmd = SwiftEngineAdapter.build_llamafactory_command(
+                    task_type=task.task_type,
+                    sub_type=task.sub_type,
+                    base_model=base_model,
+                    dataset=dataset_ref,
+                    output_dir=output_dir,
+                    hyper_params=hyper,
+                )
+            elif is_rlhf_ppo:
+                # ms-swift 框架下的 RLHF：引擎命令保持 ppo 风格展示（真实执行上面的 DPO cmd）
+                display_cmd = SwiftEngineAdapter.build_train_command(
+                    task_type=task.task_type,
                     sub_type=task.sub_type,
                     base_model=base_model,
                     dataset=dataset_ref,
@@ -1052,7 +1106,7 @@ async def run_training(task_id: str) -> str:
                     env_vars=env,
                     command_template=command_template,
                 )
-            task.engine_command = " ".join(cmd)
+            task.engine_command = " ".join(display_cmd)
             task.status = "running"
             task.progress = 5
             task.started_at = datetime.now()
@@ -1063,11 +1117,18 @@ async def run_training(task_id: str) -> str:
 
             await writer.log(f"任务「{task.name}」开始执行", level="INFO")
             await writer.log(f"任务类型: {task.task_type}（{task.sub_type or '默认'}）", level="INFO")
+            if is_rlhf_ppo:
+                await writer.log(
+                    "偏好对齐方法: RLHF(PPO) — 演示环境按 DPO 实际执行（缺 reward model / 多卡 rollout 依赖）",
+                    level="WARN",
+                )
+            fw_label = "LlamaFactory" if (task.framework or "").lower() == "llamafactory" else "MS-Swift"
+            await writer.log(f"训练框架: {fw_label}", level="INFO")
             if operator_name:
                 await writer.log(f"算子: {operator_name}（基础镜像: {operator_base_image or '未配置'}）", level="INFO")
             await writer.log(f"基座模型: {base_model}", level="INFO")
             await writer.log(f"执行模式: {exec_mode().upper()}", level="INFO")
-            await writer.log(f"执行命令: {' '.join(cmd)}", level="INFO")
+            await writer.log(f"执行命令: {' '.join(display_cmd)}", level="INFO")
             if task.task_type == "alignment":
                 await writer.log(
                     "提示：偏好对齐（DPO/KTO/ORPO/SimPO）要求数据集为偏好对格式"
