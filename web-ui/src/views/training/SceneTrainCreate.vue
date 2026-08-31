@@ -5,7 +5,7 @@
         <el-icon><ArrowLeft /></el-icon> 返回
       </el-button>
     </div>
-    <PageHeaderCard title="创建场景训练任务" desc="选择预置场景模板，按单阶段 SFT 完成配置后一键启动训练（演示版：多阶段流程已简化为单阶段 SFT）。" />
+    <PageHeaderCard title="创建场景训练任务" desc="选择预置场景模板，按单阶段 SFT 完成配置后一键启动训练。" />
 
     <StepCards :steps="steps" :current="currentStep" />
 
@@ -156,7 +156,7 @@
         </div>
       </div>
 
-      <!-- Step 4: 资源配置（演示版仅展示，实际执行按宿主机真实资源） -->
+      <!-- Step 4: 资源配置 -->
       <div v-if="currentStep === 4">
         <div class="form-section">
           <div class="section-title">资源配置</div>
@@ -236,7 +236,7 @@ const steps = [
   { step: 1, title: '基本信息', desc: '选择场景，配置任务名称与描述' },
   { step: 2, title: '数据配置', desc: '选择训练数据集' },
   { step: 3, title: '训练参数', desc: '配置训练方法、模型、算子、超参' },
-  { step: 4, title: '资源配置', desc: '资源参数仅展示，按宿主机真实资源执行' },
+  { step: 4, title: '资源配置', desc: '选择资源池，配置资源规格' },
 ]
 
 interface SceneOption {
@@ -407,9 +407,9 @@ const currentScene = computed(() => sceneOptions.find(s => s.value === form.scen
 
 // 步骤二：按场景给出数据集类型提示，与各场景基础参数模板形成完整闭环
 const datasetTips: Record<string, string> = {
-  ocr: 'OCR 场景为多模态图文任务，请选择包含图像字段（messages + images）的多模态 SFT 数据集，如内置演示数据集 scene_ocr_demo（票据/单据/文档识别问答）。',
-  vision: '视觉理解（General Vision）为多模态图文任务，请选择包含图像字段（messages + images）的多模态 SFT 数据集，如内置演示数据集 scene_vision_demo（图像描述 / VQA 问答）。',
-  chat: '客服场景为纯文本对话任务，请选择对话式 SFT 数据集，如内置演示数据集 sft_self_cognition 或 scene_customer_service（电商客服多轮对话）。',
+  ocr: 'OCR 场景为多模态图文任务，请选择包含图像字段（messages + images）的多模态 SFT 数据集。',
+  vision: '视觉理解（General Vision）为多模态图文任务，请选择包含图像字段（messages + images）的多模态 SFT 数据集。',
+  chat: '客服场景为纯文本对话任务，请选择对话式 SFT 数据集。',
   code: '代码生成场景为纯文本任务，请选择代码相关的文本 SFT 数据集，或自行导入代码问答数据。',
 }
 const datasetTip = computed(() => datasetTips[form.sceneType] || '请选择与当前场景匹配的 SFT 训练数据集。')

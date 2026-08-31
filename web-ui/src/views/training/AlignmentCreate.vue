@@ -33,7 +33,6 @@
                 </el-form-item>
               </el-col>
             </el-row>
-            <div v-if="form.alignMethod === 'rlhf'" class="form-tip">RLHF(PPO) 需要 Reward Model 与多卡推理引擎；演示环境将按 DPO 算法实际执行训练，任务信息与引擎命令仍按 RLHF 展示。</div>
             <el-form-item label="任务描述">
               <el-input v-model="form.description" type="textarea" :rows="3" placeholder="请输入任务描述" />
             </el-form-item>
@@ -58,7 +57,7 @@
                 </el-form-item>
               </el-col>
             </el-row>
-            <div class="form-tip">偏好数据集需为偏好对格式（每行含 chosen / rejected 字段，可用演示数据集 preference_demo）；若选择普通对话数据集会解析失败。</div>
+            <div class="form-tip">偏好数据集需为偏好对格式（每行含 chosen / rejected 字段）；若选择普通对话数据集会解析失败。</div>
           </div>
         </div>
       </div>
@@ -138,7 +137,7 @@
         </div>
       </div>
 
-      <!-- Step 4: 资源配置（演示版仅展示，实际执行按宿主机真实资源） -->
+      <!-- Step 4: 资源配置 -->
       <div v-if="currentStep === 4">
         <div class="form-section">
           <div class="section-title">资源配置</div>
@@ -217,7 +216,7 @@ const steps = [
   { step: 1, title: '基本信息', desc: '配置任务名称、对齐方法、描述' },
   { step: 2, title: '数据配置', desc: '选择偏好数据集与验证数据集' },
   { step: 3, title: '训练参数', desc: '配置训练框架、方法、模型、超参' },
-  { step: 4, title: '资源配置', desc: '资源参数仅展示，按宿主机真实资源执行' },
+  { step: 4, title: '资源配置', desc: '选择资源池，配置资源规格' },
 ]
 
 const form = reactive({

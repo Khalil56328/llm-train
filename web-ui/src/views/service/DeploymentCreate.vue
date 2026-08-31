@@ -242,10 +242,16 @@ async function loadDetail() {
   } catch { /* ignore */ }
 }
 
-onMounted(() => {
-  loadModels()
+onMounted(async () => {
+  await loadModels()
   loadOperators()
-  loadDetail()
+  await loadDetail()
+  // 从《我的模型库》跳转过来时预选模型
+  const preset = route.query.modelId as string
+  if (preset && !isEdit.value && modelList.value.some((m: any) => m.id === preset)) {
+    form.value.modelId = preset
+    onModelChange(preset)
+  }
 })
 </script>
 

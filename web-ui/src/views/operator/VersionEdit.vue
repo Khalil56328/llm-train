@@ -77,7 +77,6 @@
                       />
                       <el-button type="primary" @click="imageDialogVisible = true">选择镜像</el-button>
                     </div>
-                    <div class="field-tip">该字段为声明/展示用：任务在宿主机直接执行（TRAIN_CONTAINER_RUNTIME=local），实际运行环境为宿主机镜像，如 ModelScope Notebook 的 ubuntu22.04-cuda12.8.1-py312-torch2.10.0-1.39.0</div>
                   </el-form-item>
                 </el-col>
               </el-row>

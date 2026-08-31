@@ -1,6 +1,6 @@
 <template>
   <div class="alignment-list">
-    <PageHeaderCard title="偏好对齐" desc="偏好对齐旨在让模型的输出更符合你的偏好，平台提供 DPO/KTO/ORPO/SimPO 等离线对齐方法（演示版暂不支持 RLHF/PPO）。" />
+    <PageHeaderCard title="偏好对齐" desc="偏好对齐旨在让模型的输出更符合你的偏好，平台提供 DPO/KTO/ORPO/SimPO 等离线对齐方法。" />
     <SearchFilter v-model:model-value="searchKeyword" @search="fetchData" @reset="handleReset" @create="goCreate">
       <template #filters>
         <el-select v-model="filterStatus" placeholder="任务状态" clearable style="width: 180px" @change="fetchData">

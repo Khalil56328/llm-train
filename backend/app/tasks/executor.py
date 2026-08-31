@@ -38,6 +38,7 @@ from app.models.model import Model, ModelVersion
 from app.models.operator import OperatorVersion
 from app.models.task import TrainTask
 from app.models.task_log import TrainTaskLog, TrainTaskMetric
+from app.models.user import User
 from app.tasks.control import clear_control, get_control
 
 
@@ -613,6 +614,18 @@ async def _create_output_model(
     if base_model_ref:
         description += f"；基座: {base_model_ref}"
 
+    # 归属解析：task.created_by 存的是用户名，模型库 owner_id 口径为用户 ID，
+    # 解析成功归属任务创建者（训练产出进入其《我的模型库》），失败则归属 system
+    owner_id = "system"
+    if task.created_by:
+        try:
+            uid_row = await session.execute(
+                select(User.id).where(User.username == task.created_by)
+            )
+            owner_id = uid_row.scalar_one_or_none() or "system"
+        except Exception:  # noqa: BLE001
+            pass
+
     session.add(Model(
         id=mid,
         name=name,
@@ -621,7 +634,8 @@ async def _create_output_model(
         version=version,
         description=description,
         storage_path=str(out_path),
-        owner_id=task.created_by or "system",
+        owner_id=owner_id,
+        is_public=False,  # 训练产出默认私有，可在《我的模型库》公开 / 部署
         status="active",
     ))
     await session.flush()
@@ -1036,7 +1050,8 @@ async def run_training(task_id: str) -> str:
             )
             exec_sub_type = "DPO" if is_rlhf_ppo else task.sub_type
             if is_export:
-                # 压缩任务：演示版仅支持量化（swift export）；剪枝/蒸馏仅入库回显，不参与命令
+                # 压缩任务：剪枝/蒸馏类型底层统一按量化导出执行（swift export 不支持
+                # 剪枝/蒸馏参数，相关字段仅入库回显；参考对齐 RLHF→DPO 的兜底模式）
                 quant_method = str(hyper.get("quant_method") or hyper.get("quantMethod") or "bnb").lower()
                 params = {k: v for k, v in hyper.items() if k not in ("quant_method", "quantMethod")}
                 # 校准数据集：按任务所选校准数据集解析真实路径（GPTQ/AWQ 量化必须）。
@@ -1051,6 +1066,8 @@ async def run_training(task_id: str) -> str:
                         calib_path = cds.storage_path
                 if calib_path:
                     params["calib_dataset"] = calib_path
+                # 剪枝/蒸馏任务未配置量化参数时，兜底默认量化位数，保证量化导出可执行
+                params.setdefault("quant_bits", 4)
                 # 量化位数校验：仅允许合法整数值，避免 swift export 报 invalid int
                 qb = params.get("quant_bits")
                 if qb is not None:

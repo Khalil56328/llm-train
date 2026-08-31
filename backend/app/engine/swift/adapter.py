@@ -48,9 +48,9 @@ class SwiftEngineAdapter:
     # 正常透传（calib_dataset 由 executor 按任务所选校准数据集解析为真实路径后传入）。
     EXPORT_INTERNAL_KEYS = frozenset(PLATFORM_INTERNAL_KEYS) | {
         "quant_method", "quantMethod",   # executor 已单独提取为 --quant_method
-        "pruning_method", "pruning_ratio",  # 演示版不支持剪枝，仅入库回显
-        "distill_temp", "distill_alpha",    # 演示版不支持蒸馏，仅入库回显
-        "teacher_model", "epochs",          # 演示版不支持蒸馏，仅入库回显
+        "pruning_method", "pruning_ratio",        # 剪枝展示字段，仅入库回显
+        "distill_temp", "distill_alpha", "distill_epochs",  # 蒸馏展示字段，仅入库回显
+        "teacher_model", "epochs",                # 教师模型等展示字段，仅入库回显
     }
 
     # 训练专用超参：swift export / 量化任务不识别，透传会报 remaining_argv。

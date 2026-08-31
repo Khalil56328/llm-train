@@ -23,6 +23,7 @@
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item @click="viewDetail(item.id)">查看详情</el-dropdown-item>
+                <el-dropdown-item @click="goDeploy(item.id)">部署服务</el-dropdown-item>
                 <el-dropdown-item @click="goUpload(item.id)">上传模型</el-dropdown-item>
                 <el-dropdown-item @click="handleTogglePublic(item)">
                   {{ item.isPublic ? '取消公开' : '公开' }}
@@ -120,6 +121,10 @@ function goCreate() {
 
 function viewDetail(id: string) {
   router.push(`/model/detail/${id}`)
+}
+
+function goDeploy(id: string) {
+  router.push(`/service/deployment/create?modelId=${id}`)
 }
 
 function goUpload(id: string) {

@@ -46,7 +46,7 @@
             <el-form-item label="训练数据集" required>
               <HierarchicalSelect v-model="form.datasetId" :data="datasetTree" placeholder="请选择数据集" />
             </el-form-item>
-            <div class="form-tip">预训练数据集需为纯文本格式（JSONL 每行 {"text": "..."}，可用演示数据集 pretrain_demo）；对话格式数据会解析失败。</div>
+            <div class="form-tip">预训练数据集需为纯文本格式（JSONL 每行 {"text": "..."}）；对话格式数据会解析失败。</div>
           </div>
         </div>
       </div>
